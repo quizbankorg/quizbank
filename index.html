@@ -100,6 +100,12 @@
             right: -100px;
             background: #a855f7;
         }
+
+        .version-info {
+            margin-top: 0.75rem;
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.6);
+        }
     </style>
 </head>
 
@@ -113,7 +119,37 @@
 
         <a href="https://github.com/quizbankorg/quizbank/archive/refs/heads/main.zip" class="cta-button">Get
             QuizBank</a>
+
+        <div class="version-info" id="version-info">Loading version...</div>
     </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        (async () => {
+            try {
+                const supabaseClient = supabase.createClient(
+                    'https://bgfyvqidmxjnyhsklynv.supabase.co',
+                    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJnZnl2cWlkbXhqbnloc2tseW52Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkwNzQ5NTAsImV4cCI6MjA3NDY1MDk1MH0.a7dYad377cYyaDn4nCJHUhdXMYSlQF0s-GYSELqkWTI'
+                );
+
+                const { data, error } = await supabaseClient
+                    .from('app_version')
+                    .select('version')
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                const versionEl = document.getElementById('version-info');
+                if (data && data.version) {
+                    versionEl.textContent = `Latest version: ${data.version}`;
+                } else {
+                    versionEl.textContent = '';
+                }
+            } catch (e) {
+                document.getElementById('version-info').textContent = '';
+            }
+        })();
+    </script>
 </body>
 
 </html>
