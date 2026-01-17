@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuizBank Admin - Access Code Management</title>
+    <link rel="stylesheet" href="admin.css">
+</head>
+
+<body>
+    <div class="admin-container">
+
+        <!-- Login Screen -->
+        <div id="login-screen" class="login-screen">
+            <div class="login-card">
+                <div class="login-header">
+                    <h1>🏦 QuizBank Admin</h1>
+                    <p class="subtitle">Sign in to manage access codes</p>
+                </div>
+
+                <form id="login-form" class="login-form">
+                    <div class="form-group">
+                        <label for="login-email">Email</label>
+                        <input type="email" id="login-email" placeholder="admin@example.com" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="login-password">Password</label>
+                        <input type="password" id="login-password" placeholder="••••••••" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-full" id="login-btn">
+                        <span class="btn-text">Sign In</span>
+                        <span class="btn-loading hidden">⏳</span>
+                    </button>
+                </form>
+
+                <div id="login-error" class="login-error hidden"></div>
+
+                <p class="login-hint">
+                    Admin accounts are created in Supabase Dashboard → Authentication → Users
+                </p>
+            </div>
+        </div>
+
+        <!-- Admin Dashboard (hidden until authenticated) -->
+        <div id="admin-dashboard" class="admin-dashboard hidden">
+            <!-- Header -->
+            <header class="admin-header">
+                <div class="header-content">
+                    <h1>🏦 QuizBank Admin</h1>
+                    <p class="subtitle">Access Code Management System</p>
+                </div>
+                <div class="header-actions">
+                    <div class="connection-status" id="connection-status">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Connecting...</span>
+                    </div>
+                    <div class="user-info" id="user-info">
+                        <span class="user-email" id="user-email"></span>
+                        <button class="btn btn-secondary btn-sm" id="logout-btn">Logout</button>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Main Content -->
+            <main class="admin-main">
+                <!-- Generate Voucher Section -->
+                <section class="card generate-section">
+                    <h2>🎫 Generate New Access Code</h2>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="duration-value">Duration</label>
+                            <div class="duration-input">
+                                <input type="number" id="duration-value" min="1" max="365" value="1" />
+                                <select id="duration-unit">
+                                    <option value="1">Day(s)</option>
+                                    <option value="7">Week(s)</option>
+                                    <option value="30" selected>Month(s)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="max-uses">Max Uses</label>
+                            <input type="number" id="max-uses" min="1" max="100" value="1" />
+                            <span class="hint">1 = single use</span>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" id="generate-btn">
+                        <span class="btn-icon">✨</span>
+                        Generate Access Code
+                    </button>
+
+                    <!-- Generated Code Display -->
+                    <div class="generated-code hidden" id="generated-code">
+                        <div class="code-label">Your new access code:</div>
+                        <div class="code-display" id="code-display">QB-XXXX-YYYY</div>
+                        <button class="btn btn-secondary" id="copy-btn">
+                            <span class="btn-icon">📋</span>
+                            Copy Code
+                        </button>
+                    </div>
+                </section>
+
+                <!-- Active Vouchers Section -->
+                <section class="card vouchers-section">
+                    <div class="section-header">
+                        <h2>📋 Access Codes</h2>
+                        <button class="btn btn-icon-only" id="refresh-vouchers" title="Refresh">
+                            🔄
+                        </button>
+                    </div>
+                    <div class="table-container">
+                        <table class="data-table" id="vouchers-table">
+                            <thead>
+                                <tr>
+                                    <th>Code</th>
+                                    <th>Duration</th>
+                                    <th>Uses</th>
+                                    <th>Status</th>
+                                    <th>Created</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="vouchers-tbody">
+                                <tr class="loading-row">
+                                    <td colspan="6">Loading access codes...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- Active Users Section -->
+                <section class="card users-section">
+                    <div class="section-header">
+                        <h2>👥 Active Users</h2>
+                        <button class="btn btn-icon-only" id="refresh-users" title="Refresh">
+                            🔄
+                        </button>
+                    </div>
+                    <div class="table-container">
+                        <table class="data-table" id="users-table">
+                            <thead>
+                                <tr>
+                                    <th>Device ID</th>
+                                    <th>Access Code Used</th>
+                                    <th>Granted</th>
+                                    <th>Expires</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="users-tbody">
+                                <tr class="loading-row">
+                                    <td colspan="6">Loading users...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </main>
+        </div>
+
+        <!-- Toast Notification -->
+        <div class="toast hidden" id="toast">
+            <span class="toast-message"></span>
+        </div>
+
+        <!-- Confirmation Modal -->
+        <div class="modal-overlay hidden" id="modal-overlay">
+            <div class="modal">
+                <h3 id="modal-title">Confirm Action</h3>
+                <p id="modal-message">Are you sure you want to proceed?</p>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
+                    <button class="btn btn-danger" id="modal-confirm">Confirm</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="supabase.min.js"></script>
+    <script src="admin.js"></script>
+</body>
+
+</html>
