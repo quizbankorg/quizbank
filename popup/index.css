@@ -349,7 +349,6 @@ p {
   text-decoration: none;
   border-radius: 8px;
   font-size: 0.85rem;
-  font-weight: 600;
   box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }

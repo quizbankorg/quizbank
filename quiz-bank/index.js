@@ -924,6 +924,27 @@ class EnhancedQuizLoader {
                 </div>
             </div>
 
+            <!-- Update Available Button (hidden by default) -->
+            <a href="https://quizbankorg.github.io/quizbank/" target="_blank" id="panel-update-btn" style="
+                display: none;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+                margin-bottom: 12px;
+                padding: 10px 18px;
+                background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+                color: white;
+                text-decoration: none;
+                border-radius: 8px;
+                font-size: 13px;
+                box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
+                transition: transform 0.2s ease, box-shadow 0.2s ease;
+            " onmouseover="this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 12px rgba(245, 158, 11, 0.4)';"
+               onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 2px 8px rgba(245, 158, 11, 0.3)';">
+                <span>🆕</span>
+                <span>New Update Available</span>
+            </a>
+
             <div style="padding-top: 8px; font-size: 11px; color: #666; text-align: center; border-top: 1px solid #eee;">
                 QuizBank Active ✨
             </div>
@@ -1014,7 +1035,63 @@ class EnhancedQuizLoader {
       })
     }
 
+    // Check for updates and show button if needed
+    this.checkForUpdatesInPanel()
+
     this.logger.info('Preview panel created successfully')
+  }
+
+  /**
+   * Check for updates and show the panel update button if a new version is available
+   */
+  async checkForUpdatesInPanel() {
+    try {
+      const { data, error } = await this.dbManager.client
+        .from('app_version')
+        .select('version')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+
+      if (error) {
+        this.logger.error('Error checking for updates:', error)
+        return
+      }
+
+      if (data && data.version) {
+        const currentVersion = browser.runtime.getManifest().version
+        const latestVersion = data.version
+
+        if (this.compareVersions(currentVersion, latestVersion) < 0) {
+          // Current version is lower than latest - show update button
+          const updateBtn = document.getElementById('panel-update-btn')
+          if (updateBtn) {
+            updateBtn.style.display = 'flex'
+          }
+        }
+      }
+    } catch (e) {
+      this.logger.error('Update check error:', e)
+    }
+  }
+
+  /**
+   * Compare two semver version strings
+   * Returns: -1 if v1 < v2, 0 if v1 == v2, 1 if v1 > v2
+   */
+  compareVersions(v1, v2) {
+    const parts1 = v1.split('.').map(Number)
+    const parts2 = v2.split('.').map(Number)
+
+    for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+      const p1 = parts1[i] || 0
+      const p2 = parts2[i] || 0
+
+      if (p1 < p2) return -1
+      if (p1 > p2) return 1
+    }
+
+    return 0
   }
 
   /**
