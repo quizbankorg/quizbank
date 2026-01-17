@@ -944,7 +944,7 @@ class EnhancedQuizLoader {
             </a>
 
             <div style="padding-top: 8px; font-size: 11px; color: #666; text-align: center; border-top: 1px solid #eee;">
-                QuizBank Active ✨
+                QuizBank Active ✨ <span style="color: #999;">v${browser.runtime.getManifest().version}</span>
             </div>
                             </div>
         `
@@ -1704,10 +1704,13 @@ function showActivationRequiredPanel() {
         line-height: 1;
       ">✕</button>
     </div>
-    <p style="margin: 0; color: #666; font-size: 12px;">
+    <p style="margin: 0 0 8px 0; color: #666; font-size: 12px;">
       Please activate QuizBank to use this feature.<br>
       <span style="color: #999; font-size: 11px;">Click the extension icon and enter your access code.</span>
     </p>
+    <div style="font-size: 10px; color: #999; text-align: center; padding-top: 8px; border-top: 1px solid #eee;">
+      v${browser.runtime.getManifest().version}
+    </div>
   `
 
   document.body.appendChild(panel)
