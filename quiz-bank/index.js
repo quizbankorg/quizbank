@@ -938,9 +938,7 @@ class EnhancedQuizLoader {
                 border-radius: 8px;
                 font-size: 13px;
                 box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
-                transition: transform 0.2s ease, box-shadow 0.2s ease;
-            " onmouseover="this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 12px rgba(245, 158, 11, 0.4)';"
-               onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 2px 8px rgba(245, 158, 11, 0.3)';">
+            ">
                 <span>🆕</span>
                 <span>New Update Available</span>
             </a>
@@ -1046,7 +1044,7 @@ class EnhancedQuizLoader {
    */
   async checkForUpdatesInPanel() {
     try {
-      const { data, error } = await this.dbManager.client
+      const { data, error } = await this.dbManager.supabase
         .from('app_version')
         .select('version')
         .order('created_at', { ascending: false })
