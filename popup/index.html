@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QuizBank</title>
+  <link rel="stylesheet" href="index.css">
+</head>
+
+<body>
+  <!-- Settings Dropdown (shown only when access is valid) -->
+  <div class="dropdown hidden">
+    <div class="gear-icon">⚙️</div>
+    <div class="dropdown-menu">
+      <div class="toggle-option">
+        <label class="toggle-label">
+          <input type="checkbox" id="logging-toggle">
+          <span class="toggle-slider"></span>
+          <span class="toggle-text">Enable Logging</span>
+        </label>
+        <a href="#" id="download-debug" class="debug-link">
+          <span class="download-icon">📥</span>
+          <span class="debug-text">logs</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Access Gate (shown when no valid access) -->
+  <div id="access-gate" class="access-gate hidden">
+    <div class="access-header">
+      <span class="lock-icon">🔐</span>
+      <h2>QuizBank Access</h2>
+    </div>
+    <p class="access-description">Enter your access code to activate QuizBank</p>
+
+    <div class="voucher-form">
+      <input type="text" id="voucher-input" placeholder="Enter access code" maxlength="20" autocomplete="off"
+        spellcheck="false">
+      <button id="activate-btn" class="activate-btn">
+        <span class="btn-text">Activate</span>
+        <span class="btn-loading hidden">⏳</span>
+      </button>
+    </div>
+
+    <div id="voucher-error" class="voucher-error hidden"></div>
+
+    <div class="voucher-warning">
+      <span class="warning-icon">⚠️</span>
+      <span>Reinstalling the extension requires re-entering an access code.</span>
+    </div>
+  </div>
+
+  <!-- Main Content (shown when access is valid) -->
+  <div id="main-content" class="main-content hidden">
+
+    <header>🏦 QuizBank Status</header>
+
+    <!-- Access Info Banner -->
+    <div id="access-info" class="access-info">
+      <span class="access-badge">✓ Active</span>
+      <span id="access-expires" class="access-expires"></span>
+    </div>
+
+    <p>A panel will show up when you are on a quiz page.</p>
+  </div>
+
+  <script src="browser-polyfill.min.js"></script>
+  <script src="../database/supabase.min.js"></script>
+  <script src="index.js"></script>
+</body>
+
+</html>

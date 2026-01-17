@@ -1,0 +1,19 @@
+{
+    "version": 3,
+    "file": "./quiz-bank/injectable/get-env.js",
+    "mappings": "AAAAA,OAAOC,cAAc,IAAIC,YAAY,UAAW,CAAEC,OAAQH,OAAOI",
+    "sources": [
+        "webpack://canvas-quiz-bank/./src/quiz-bank/injectable/get-env.ts"
+    ],
+    "sourcesContent": [
+        "window.dispatchEvent(new CustomEvent('quizEnv', { detail: window.ENV }))\r\n"
+    ],
+    "names": [
+        "window",
+        "dispatchEvent",
+        "CustomEvent",
+        "detail",
+        "ENV"
+    ],
+    "sourceRoot": ""
+}

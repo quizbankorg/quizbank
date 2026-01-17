@@ -1,0 +1,60 @@
+{
+  "update_url": "https://clients2.google.com/service/update2/crx",
+  "manifest_version": 3,
+  "name": "QuizBank",
+  "short_name": "QuizBank",
+  "version": "2.0.0",
+  "description": "Automatically load correct answers from a knowledge base built across all quizzes in all courses.",
+  "icons": {
+    "16": "assets/img/icon16.png",
+    "48": "assets/img/icon48.png",
+    "128": "assets/img/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.instructure.com/courses/*/quizzes/*",
+        "*://*.edu/courses/*/quizzes/*"
+      ],
+      "js": [
+        "quiz-bank/browser-polyfill.min.js",
+        "database/supabase.min.js",
+        "database/supabase-manager.js",
+        "quiz-bank/compileQuestions.js",
+        "quiz-bank/index.js"
+      ],
+      "css": [
+        "quiz-bank/index.css"
+      ]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "quiz-bank/injectable/get-env.js"
+      ],
+      "matches": [
+        "*://*.instructure.com/*",
+        "*://*.edu/*"
+      ]
+    }
+  ],
+  "action": {
+    "default_icon": "assets/img/icon128.png",
+    "default_popup": "popup/index.html",
+    "default_title": "QuizBank",
+    "browser_action_popup_width": 400,
+    "browser_action_popup_height": 600
+  },
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*.supabase.co/*"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "quizbank@extension.local"
+    }
+  }
+}
