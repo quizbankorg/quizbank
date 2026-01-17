@@ -28,7 +28,9 @@ const elements = {
   accessExpires: document.getElementById('access-expires'),
   dropdown: document.querySelector('.dropdown'),
   loggingToggle: document.getElementById('logging-toggle'),
-  downloadDebug: document.getElementById('download-debug')
+  downloadDebug: document.getElementById('download-debug'),
+  updateBtn: document.getElementById('update-btn'),
+  updateBtnGate: document.getElementById('update-btn-gate')
 };
 
 // ==================== DEVICE ID MANAGEMENT ====================
@@ -426,6 +428,74 @@ async function notifyContentScriptActivated() {
   }
 }
 
+// ==================== VERSION CHECKING ====================
+
+/**
+ * Get the current extension version from manifest
+ */
+function getCurrentVersion() {
+  return browser.runtime.getManifest().version;
+}
+
+/**
+ * Compare two semver version strings
+ * Returns: -1 if v1 < v2, 0 if v1 == v2, 1 if v1 > v2
+ */
+function compareVersions(v1, v2) {
+  const parts1 = v1.split('.').map(Number);
+  const parts2 = v2.split('.').map(Number);
+
+  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    const p1 = parts1[i] || 0;
+    const p2 = parts2[i] || 0;
+
+    if (p1 < p2) return -1;
+    if (p1 > p2) return 1;
+  }
+
+  return 0;
+}
+
+/**
+ * Check for available updates
+ */
+async function checkForUpdates() {
+  try {
+    if (!supabaseClient) {
+      supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    }
+
+    const { data, error } = await supabaseClient
+      .from('app_version')
+      .select('version')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error) {
+      console.error('Error checking for updates:', error);
+      return;
+    }
+
+    if (data && data.version) {
+      const currentVersion = getCurrentVersion();
+      const latestVersion = data.version;
+
+      if (compareVersions(currentVersion, latestVersion) < 0) {
+        // Current version is lower than latest - show update buttons
+        if (elements.updateBtn) {
+          elements.updateBtn.classList.remove('hidden');
+        }
+        if (elements.updateBtnGate) {
+          elements.updateBtnGate.classList.remove('hidden');
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Update check error:', e);
+  }
+}
+
 // ==================== INITIALIZATION ====================
 
 async function initializePopup() {
@@ -447,6 +517,9 @@ async function initializePopup() {
     showAccessGate();
     setupVoucherForm();
   }
+
+  // Check for updates (available to all users)
+  checkForUpdates();
 }
 
 // Start initialization
