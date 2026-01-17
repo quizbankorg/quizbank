@@ -1,7 +1,7 @@
 # QuizBank
 
 ## Download Extension
-[Download]()
+[Download](https://github.com/quizbankorg/quizbank/archive/refs/heads/main.zip)
 
 
 ## 🏦 What is QuizBank?
