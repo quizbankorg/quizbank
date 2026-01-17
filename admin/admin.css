@@ -300,6 +300,41 @@ body {
     text-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
 }
 
+/* Version Management Section */
+.version-section {
+    border: 1px solid var(--primary);
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(139, 92, 246, 0.05) 100%);
+}
+
+.version-content {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.current-version {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    background: var(--bg-dark);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+}
+
+.version-label {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+}
+
+.version-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    font-family: 'Fira Code', 'Consolas', monospace;
+    color: var(--success);
+    letter-spacing: 1px;
+}
+
 /* Tables */
 .table-container {
     overflow-x: auto;

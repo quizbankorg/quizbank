@@ -60,6 +60,38 @@
 
             <!-- Main Content -->
             <main class="admin-main">
+                <!-- Version Management Section -->
+                <section class="card version-section">
+                    <div class="section-header">
+                        <h2>🚀 Version Management</h2>
+                        <button class="btn btn-icon-only" id="refresh-version" title="Refresh">
+                            🔄
+                        </button>
+                    </div>
+                    <div class="version-content">
+                        <div class="current-version">
+                            <span class="version-label">Current Published Version:</span>
+                            <span class="version-value" id="current-version">Loading...</span>
+                        </div>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="new-version">New Version</label>
+                                <input type="text" id="new-version" placeholder="e.g. 2.1.0"
+                                    pattern="^\d+\.\d+\.\d+$" />
+                                <span class="hint">Semver format: major.minor.patch</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="release-notes">Release Notes (optional)</label>
+                                <input type="text" id="release-notes" placeholder="What's new in this version?" />
+                            </div>
+                        </div>
+                        <button class="btn btn-primary" id="publish-version-btn">
+                            <span class="btn-icon">📢</span>
+                            Publish New Version
+                        </button>
+                    </div>
+                </section>
+
                 <!-- Generate Voucher Section -->
                 <section class="card generate-section">
                     <h2>🎫 Generate New Access Code</h2>

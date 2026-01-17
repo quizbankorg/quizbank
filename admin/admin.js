@@ -44,7 +44,13 @@ const elements = {
     modalTitle: document.getElementById('modal-title'),
     modalMessage: document.getElementById('modal-message'),
     modalCancel: document.getElementById('modal-cancel'),
-    modalConfirm: document.getElementById('modal-confirm')
+    modalConfirm: document.getElementById('modal-confirm'),
+    // Version management
+    currentVersion: document.getElementById('current-version'),
+    newVersionInput: document.getElementById('new-version'),
+    releaseNotesInput: document.getElementById('release-notes'),
+    publishVersionBtn: document.getElementById('publish-version-btn'),
+    refreshVersion: document.getElementById('refresh-version')
 };
 
 // ==================== INITIALIZATION ====================
@@ -104,7 +110,8 @@ async function showDashboard() {
     // Load data
     await Promise.all([
         loadVouchers(),
-        loadUsers()
+        loadUsers(),
+        loadCurrentVersion()
     ]);
 }
 
@@ -199,6 +206,10 @@ function setupEventListeners() {
     elements.modalOverlay.addEventListener('click', (e) => {
         if (e.target === elements.modalOverlay) hideModal();
     });
+
+    // Version management
+    elements.publishVersionBtn.addEventListener('click', publishNewVersion);
+    elements.refreshVersion.addEventListener('click', loadCurrentVersion);
 }
 
 // ==================== VOUCHER GENERATION ====================
@@ -260,6 +271,114 @@ async function copyCode() {
         document.body.removeChild(textArea);
         showToast('Code copied to clipboard!', 'success');
     }
+}
+
+// ==================== VERSION MANAGEMENT ====================
+
+async function loadCurrentVersion() {
+    if (!currentUser) return;
+
+    elements.currentVersion.textContent = 'Loading...';
+
+    try {
+        const { data, error } = await supabaseClient
+            .from('app_version')
+            .select('version, release_notes, created_at')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single();
+
+        if (error) throw error;
+
+        if (data) {
+            elements.currentVersion.textContent = data.version;
+            elements.currentVersion.title = data.release_notes || 'No release notes';
+        } else {
+            elements.currentVersion.textContent = 'No version found';
+        }
+    } catch (error) {
+        console.error('Error loading version:', error);
+        elements.currentVersion.textContent = 'Error loading';
+    }
+}
+
+async function publishNewVersion() {
+    if (!currentUser) {
+        showToast('Please log in first', 'error');
+        return;
+    }
+
+    const newVersion = elements.newVersionInput.value.trim();
+    const releaseNotes = elements.releaseNotesInput.value.trim();
+
+    // Validate version format
+    if (!newVersion) {
+        showToast('Please enter a version number', 'error');
+        return;
+    }
+
+    if (!/^\d+\.\d+\.\d+$/.test(newVersion)) {
+        showToast('Invalid version format. Use semver: X.Y.Z', 'error');
+        return;
+    }
+
+    // Compare with current version
+    const currentVersionText = elements.currentVersion.textContent;
+    if (currentVersionText && currentVersionText !== 'Loading...' && currentVersionText !== 'No version found') {
+        if (compareVersions(newVersion, currentVersionText) <= 0) {
+            showToast('New version must be higher than current version', 'error');
+            return;
+        }
+    }
+
+    showModal(
+        'Publish New Version',
+        `Are you sure you want to publish version ${newVersion}? All users with older versions will see the update notification.`,
+        async () => {
+            elements.publishVersionBtn.disabled = true;
+            elements.publishVersionBtn.innerHTML = '<span class="btn-icon">⏳</span> Publishing...';
+
+            try {
+                const { data, error } = await supabaseClient
+                    .from('app_version')
+                    .insert([{
+                        version: newVersion,
+                        release_notes: releaseNotes || null
+                    }])
+                    .select();
+
+                if (error) throw error;
+
+                showToast(`Version ${newVersion} published successfully!`, 'success');
+                elements.newVersionInput.value = '';
+                elements.releaseNotesInput.value = '';
+                await loadCurrentVersion();
+
+            } catch (error) {
+                console.error('Error publishing version:', error);
+                showToast(`Error: ${error.message}`, 'error');
+            } finally {
+                elements.publishVersionBtn.disabled = false;
+                elements.publishVersionBtn.innerHTML = '<span class="btn-icon">📢</span> Publish New Version';
+                hideModal();
+            }
+        }
+    );
+}
+
+function compareVersions(v1, v2) {
+    const parts1 = v1.split('.').map(Number);
+    const parts2 = v2.split('.').map(Number);
+
+    for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+        const p1 = parts1[i] || 0;
+        const p2 = parts2[i] || 0;
+
+        if (p1 < p2) return -1;
+        if (p1 > p2) return 1;
+    }
+
+    return 0;
 }
 
 // ==================== LOAD DATA ====================
