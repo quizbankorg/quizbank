@@ -30,7 +30,9 @@ const elements = {
   loggingToggle: document.getElementById('logging-toggle'),
   downloadDebug: document.getElementById('download-debug'),
   updateBtn: document.getElementById('update-btn'),
-  updateBtnGate: document.getElementById('update-btn-gate')
+  updateBtnGate: document.getElementById('update-btn-gate'),
+  versionGate: document.getElementById('version-gate'),
+  versionMain: document.getElementById('version-main')
 };
 
 // ==================== DEVICE ID MANAGEMENT ====================
@@ -520,6 +522,24 @@ async function initializePopup() {
 
   // Check for updates (available to all users)
   checkForUpdates();
+
+  // Display version
+  displayVersion();
+}
+
+/**
+ * Display the current extension version
+ */
+function displayVersion() {
+  const version = browser.runtime.getManifest().version;
+  const versionText = `v${version}`;
+  
+  if (elements.versionGate) {
+    elements.versionGate.textContent = versionText;
+  }
+  if (elements.versionMain) {
+    elements.versionMain.textContent = versionText;
+  }
 }
 
 // Start initialization

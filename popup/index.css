@@ -356,4 +356,11 @@ p {
   font-size: 16px;
 }
 
+.version-info {
+  margin-top: 12px;
+  font-size: 0.75rem;
+  color: #999;
+  text-align: center;
+}
+
 /* END OF UPDATE BUTTON STYLES */
