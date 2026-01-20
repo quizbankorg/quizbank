@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Listen</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 100%;
+            margin: 0 auto;
+            padding: 15px;
+            line-height: 1.6;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        @media (min-width: 768px) {
+            body {
+                max-width: 800px;
+                padding: 20px;
+            }
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .active {
+            background-color: #4CAF50;
+        }
+
+        .inactive {
+            background-color: #F44336;
+        }
+
+        .text-container {
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin-top: 15px;
+            border-radius: 8px;
+            background-color: #f9f9f9;
+            margin-bottom: 15px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            font-size: 16px;
+            line-height: 1.5;
+        }
+
+        .text-container img {
+            max-width: 100%;
+            height: auto;
+            margin-top: 10px;
+            border-radius: 8px;
+            display: block;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .copy-btn {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 0;
+            cursor: pointer;
+            border-radius: 8px;
+            vertical-align: middle;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+            min-height: 44px;
+            min-width: 44px;
+        }
+
+        .copy-btn:hover {
+            background-color: #45a049;
+        }
+
+        .copy-btn:active {
+            background-color: #3d8b40;
+        }
+
+        .test-btn {
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin-left: 20px;
+            cursor: pointer;
+            border-radius: 8px;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+            min-height: 44px;
+            min-width: 44px;
+        }
+
+        .test-btn:hover {
+            background-color: #0b7dda;
+        }
+
+        .test-btn:active {
+            background-color: #0a6fc2;
+        }
+
+        .status-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .status-left {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .header-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+
+        .header-container h2 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+
+        @media (max-width: 576px) {
+            .header-container {
+                flex-direction: row;
+                align-items: center;
+                justify-content: flex-start;
+                gap: 10px;
+            }
+
+            .copy-btn {
+                width: auto;
+                min-width: 80px;
+                margin-top: 0;
+            }
+
+            .test-btn {
+                width: auto;
+                min-width: 80px;
+                margin-left: 10px;
+                margin-top: 0;
+            }
+
+            .status-container {
+                flex-direction: row;
+                align-items: center;
+                justify-content: space-between;
+            }
+
+            .status-left {
+                justify-content: flex-start;
+            }
+        }
+
+        /* New styles for PDF upload section */
+        .pdf-upload-section {
+            display: none;
+        }
+
+        .file-upload {
+            display: none;
+        }
+
+        .upload-btn {
+            display: none;
+        }
+
+        .upload-status {
+            margin-top: 10px;
+            color: #666;
+            font-style: italic;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="status-container">
+        <div class="status-left">
+            <div class="status-indicator active" id="status-indicator"></div>
+            <span id="status-text">Status: Active</span>
+        </div>
+        <button class="test-btn" id="test-btn">Test</button>
+    </div>
+
+    <!-- Updated PDF Upload Section -->
+    <!-- <div class="api-url-container">
+        <label for="pdf-upload">Reference PDF:</label>
+        <input type="file" id="pdf-upload" class="api-url-input" accept=".pdf" />
+        <button id="upload-btn" class="api-url-save">Upload</button>
+        <button id="reset-btn" class="api-url-save" style="background-color: #f44336;">Reset</button>
+    </div>
+    <div id="upload-status" class="upload-status"></div> -->
+
+    <div class="header-container">
+        <h2>Clipboard</h2>
+        <button class="copy-btn" id="copy-btn">Copy</button>
+    </div>
+    <div class="text-container" id="template-text"></div>
+
+    <!-- <div class="header-container">
+        <h2>Dumb AI Assistant</h2>
+    </div>
+    <div class="text-container" id="ai-text"></div> -->
+
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script>
+        // Set initial variables
+        let isActive = true;
+        let latestMessage = "No messages received yet.";
+        let socket;
+        const statusIndicator = document.getElementById('status-indicator');
+        const statusText = document.getElementById('status-text');
+        const templateText = document.getElementById('template-text');
+        /* const aiText = document.getElementById('ai-text'); */
+        const copyBtn = document.getElementById('copy-btn');
+        const testBtn = document.getElementById('test-btn');
+
+        // Test button redirect to test.html
+        testBtn.addEventListener('click', () => {
+            window.open('test.html', '_blank');
+        });
+
+        // Hardcoded API URL
+        const apiUrl = 'https://api-htmd.onrender.com';
+
+        // Check for user parameter in URL (from QR code)
+        const urlParams = new URLSearchParams(window.location.search);
+        const userFromUrl = urlParams.get('user');
+
+        // Load username: URL param > localStorage
+        let username = userFromUrl || localStorage.getItem('clipboard_auto_user') || '';
+
+        // Save to localStorage for future visits if from URL
+        if (userFromUrl) {
+            localStorage.setItem('clipboard_auto_user', userFromUrl);
+        }
+
+        // Handle PDF upload
+        /* uploadBtn.addEventListener('click', () => {
+            const fileInput = document.getElementById('pdf-upload');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                uploadStatus.textContent = 'Please select a file';
+                return;
+            }
+
+            if (!username) {
+                uploadStatus.textContent = 'Please set a username first';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('pdf', file);
+
+            // Disable upload button and show uploading status
+            uploadBtn.disabled = true;
+            uploadStatus.textContent = 'Uploading...';
+
+            fetch(`${apiUrl}/api/${username}/reference`, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    uploadStatus.textContent = `Error: ${data.error}${data.details ? ' - ' + data.details : ''}`;
+                } else {
+                    uploadStatus.textContent = 'Reference uploaded successfully';
+                }
+            })
+            .catch(error => {
+                uploadStatus.textContent = 'Error uploading reference. Please try again.';
+                console.error('Error:', error);
+            })
+            .finally(() => {
+                // Re-enable upload button after upload completes (success or failure)
+                uploadBtn.disabled = false;
+            });
+        });
+
+        // Handle reset reference
+        resetBtn.addEventListener('click', () => {
+            if (!username) {
+                uploadStatus.textContent = 'Please set a username first';
+                return;
+            }
+
+            // Disable reset button and show resetting status
+            resetBtn.disabled = true;
+            uploadStatus.textContent = 'Resetting...';
+
+            fetch(`${apiUrl}/api/${username}/reference`, {
+                method: 'DELETE'
+            })
+            .then(response => response.json())
+            .then(data => {
+                uploadStatus.textContent = 'Reference cleared successfully';
+                document.getElementById('pdf-upload').value = ''; // Clear file input
+            })
+            .catch(error => {
+                uploadStatus.textContent = 'Error clearing reference';
+                console.error('Error:', error);
+            })
+            .finally(() => {
+                // Re-enable reset button after reset completes
+                resetBtn.disabled = false;
+            });
+        }); */
+
+        // Function to update status display only (doesn't change behavior)
+        function updateStatusDisplay(active) {
+            if (active) {
+                statusIndicator.classList.remove('inactive');
+                statusIndicator.classList.add('active');
+                statusText.textContent = 'Status: Active';
+            } else {
+                statusIndicator.classList.remove('active');
+                statusIndicator.classList.add('inactive');
+                statusText.textContent = 'Status: Inactive (Tab Hidden)';
+            }
+        }
+
+        // Copy button functionality
+        copyBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(latestMessage)
+                .then(() => {
+                    const originalText = copyBtn.textContent;
+                    copyBtn.textContent = "Copied!";
+                    setTimeout(() => {
+                        copyBtn.textContent = originalText;
+                    }, 2000);
+                })
+                .catch(err => {
+                    console.error('Failed to copy text: ', err);
+                });
+        });
+
+        // Socket.io connection handling
+        function startSocketConnection() {
+            if (!username) {
+                templateText.textContent = "Please enter a username first";
+                /* aiText.textContent = "Please enter a username first"; */
+                return;
+            }
+
+            // Initialize Socket.io connection - PERSISTENT (never disconnects unless tab closes)
+            socket = io(apiUrl, {
+                transports: ['websocket', 'polling'],
+                reconnection: true,
+                reconnectionAttempts: Infinity,    // Never give up reconnecting
+                reconnectionDelay: 1000,           // 1 second between attempts
+                reconnectionDelayMax: 5000,        // Max 5 seconds between attempts
+                timeout: 20000
+            });
+
+            // Connect to the server and join the room
+            socket.on('connect', () => {
+                socket.emit('join', username);
+                templateText.textContent = "Listening for messages...";
+                updateStatusDisplay(true);
+                /* aiText.textContent = "Listening for messages..."; */
+            });
+
+            // Listen for new messages
+            socket.on('new_message', async (message) => {
+                if (message && message.originalText) {
+                    latestMessage = message.originalText;
+
+                    // Find image URLs in the message
+                    const imageUrlRegex = /https:\/\/feu\.instructure\.com\/users\/\d+\/files\/\d+\/preview\?verifier=[^"\s]+/g;
+                    const imageUrls = latestMessage.match(imageUrlRegex) || [];
+
+                    // Create HTML content with text and images
+                    let displayContent = latestMessage;
+
+                    // Remove the instructional text from display but keep it in latestMessage
+                    if (displayContent.startsWith("I will consecutively send you questions")) {
+                        const promptEndIndex = displayContent.indexOf("search online.\n\n") + "search online.\n\n".length;
+                        displayContent = displayContent.substring(promptEndIndex).trim();
+                        if (!displayContent) {
+                            displayContent = "Waiting for questions...";
+                        }
+                    }
+
+                    // Add images below the text
+                    for (const url of imageUrls) {
+                        try {
+                            const response = await fetch(`${apiUrl}/api/fetch-image?url=${encodeURIComponent(url)}`);
+                            if (response.ok) {
+                                const blob = await response.blob();
+                                const imageUrl = URL.createObjectURL(blob);
+                                displayContent += `\n<img src="${imageUrl}" alt="Image from message">`;
+                            }
+                        } catch (error) {
+                            console.error('Error fetching image:', error);
+                        }
+                    }
+
+                    templateText.innerHTML = displayContent;
+                }
+            });
+
+            socket.on('disconnect', () => {
+                templateText.textContent = "Disconnected. Reconnecting...";
+                updateStatusDisplay(false);
+                /* aiText.textContent = "Disconnected from server. Reconnecting..."; */
+            });
+
+            socket.on('reconnect', (attemptNumber) => {
+                console.log('Reconnected after', attemptNumber, 'attempts');
+                templateText.textContent = "Reconnected! Listening for messages...";
+                updateStatusDisplay(true);
+            });
+
+            socket.on('error', (error) => {
+                console.error('Connection error:', error);
+                templateText.textContent = "Connection error. Will retry...";
+                /* aiText.textContent = "Connection error. Please refresh the page."; */
+            });
+
+            socket.on('connect_error', (error) => {
+                console.error('Connection error:', error);
+                updateStatusDisplay(false);
+                /* aiText.textContent = "Connection error. Please check your internet connection."; */
+            });
+        }
+
+        // Initialize
+        templateText.textContent = latestMessage; // Set initial template text
+        /* aiText.textContent = latestMessage; // Set initial AI text */
+
+        // Start listening immediately if username is set
+        if (username) {
+            startSocketConnection();
+        } else {
+            templateText.textContent = "Please scan the QR code from the QuizBank extension to connect.";
+            statusIndicator.classList.remove('active');
+            statusIndicator.classList.add('inactive');
+            statusText.textContent = 'Status: Not Connected';
+            /* aiText.textContent = "Please scan the QR code from the QuizBank extension"; */
+        }
+    </script>
+</body>
+
+</html>
