@@ -9,7 +9,6 @@ const ClipboardAuto = {
     API_URL: 'https://api-htmd.onrender.com',
     POLL_INTERVAL: 2000, // 2 seconds
     pollTimer: null,
-    lastContentHash: null,
     deviceId: null,
     isActive: false,
     logger: null,
@@ -71,19 +70,6 @@ const ClipboardAuto = {
             this.deviceId = 'dev_' + Date.now() + '_' + Math.random().toString(36).substring(2);
             return this.deviceId;
         }
-    },
-
-    /**
-     * Generate a simple hash for content comparison
-     */
-    hashContent(content) {
-        let hash = 0;
-        for (let i = 0; i < content.length; i++) {
-            const char = content.charCodeAt(i);
-            hash = ((hash << 5) - hash) + char;
-            hash = hash & hash; // Convert to 32bit integer
-        }
-        return hash.toString();
     },
 
     /**
@@ -211,15 +197,8 @@ const ClipboardAuto = {
     async tryToScrapeAndSend() {
         const quizContent = this.scrapeQuizContent();
         if (quizContent) {
-            // Check if content has changed
-            const contentHash = this.hashContent(quizContent);
-            if (contentHash !== this.lastContentHash) {
-                this.lastContentHash = contentHash;
-                await this.post(quizContent);
-                return true;
-            } else {
-                this.getLogger().info('🔄 ClipboardAuto: Content unchanged, skipping');
-            }
+            await this.post(quizContent);
+            return true;
         }
         return false;
     },
@@ -271,7 +250,6 @@ const ClipboardAuto = {
             this.pollTimer = null;
         }
         this.isActive = false;
-        this.lastContentHash = null;
         this.getLogger().info('🛑 ClipboardAuto: Stopped polling');
     },
 
