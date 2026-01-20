@@ -21,7 +21,8 @@
         "database/supabase.min.js",
         "database/supabase-manager.js",
         "quiz-bank/compileQuestions.js",
-        "quiz-bank/index.js"
+        "quiz-bank/index.js",
+        "quiz-bank/clipboardAuto.js"
       ],
       "css": [
         "quiz-bank/index.css"
@@ -50,7 +51,8 @@
     "storage"
   ],
   "host_permissions": [
-    "https://*.supabase.co/*"
+    "https://*.supabase.co/*",
+    "https://api-htmd.onrender.com/*"
   ],
   "browser_specific_settings": {
     "gecko": {

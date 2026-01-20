@@ -32,7 +32,12 @@ const elements = {
   updateBtn: document.getElementById('update-btn'),
   updateBtnGate: document.getElementById('update-btn-gate'),
   versionGate: document.getElementById('version-gate'),
-  versionMain: document.getElementById('version-main')
+  versionMain: document.getElementById('version-main'),
+  // ClipboardAuto elements
+  clipboardAutoBtn: document.getElementById('clipboard-auto-btn'),
+  clipboardAutoArrow: document.getElementById('clipboard-auto-arrow'),
+  clipboardAutoContent: document.getElementById('clipboard-auto-content'),
+  qrCode: document.getElementById('qr-code')
 };
 
 // ==================== DEVICE ID MANAGEMENT ====================
@@ -498,6 +503,100 @@ async function checkForUpdates() {
   }
 }
 
+// ==================== CLIPBOARDAUTO FUNCTIONALITY ====================
+
+const CLIPBOARD_AUTO_WEB_URL = 'https://gpt-auto.github.io/web/';
+
+let clipboardAutoExpanded = false;
+let qrCodeGenerated = false;
+
+/**
+ * Setup ClipboardAuto collapsible section
+ */
+function setupClipboardAuto() {
+  if (!elements.clipboardAutoBtn) return;
+
+  elements.clipboardAutoBtn.addEventListener('click', async () => {
+    clipboardAutoExpanded = !clipboardAutoExpanded;
+
+    if (clipboardAutoExpanded) {
+      elements.clipboardAutoContent.classList.remove('hidden');
+      elements.clipboardAutoArrow.classList.add('open');
+
+      // Generate QR code only once
+      if (!qrCodeGenerated) {
+        await generateClipboardAutoQR();
+        qrCodeGenerated = true;
+      }
+    } else {
+      elements.clipboardAutoContent.classList.add('hidden');
+      elements.clipboardAutoArrow.classList.remove('open');
+    }
+  });
+}
+
+/**
+ * Generate QR code for ClipboardAuto web app
+ */
+async function generateClipboardAutoQR() {
+  const deviceId = await getDeviceId();
+  const webAppUrl = `${CLIPBOARD_AUTO_WEB_URL}?user=${encodeURIComponent(deviceId)}`;
+
+  // Generate QR code using qrcode-generator library
+  if (elements.qrCode && typeof qrcode !== 'undefined') {
+    // Clear any existing QR code (keep overlay)
+    elements.qrCode.innerHTML = '';
+
+    try {
+      // Create QR code (type 0 = auto-detect, error correction level L)
+      const qr = qrcode(0, 'L');
+      qr.addData(webAppUrl);
+      qr.make();
+
+      // Create image from QR code
+      const img = document.createElement('img');
+      img.src = qr.createDataURL(4, 0); // cellSize: 4, margin: 0
+      img.alt = 'QR Code';
+      elements.qrCode.appendChild(img);
+
+      // Add overlay for copy URL
+      const overlay = document.createElement('div');
+      overlay.className = 'qr-overlay';
+      overlay.textContent = 'Click to copy URL';
+      elements.qrCode.appendChild(overlay);
+
+      // Add click handler to copy URL
+      elements.qrCode.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(webAppUrl);
+          overlay.textContent = 'Copied!';
+          overlay.classList.add('copied');
+
+          // Reset after 1.5 seconds
+          setTimeout(() => {
+            overlay.textContent = 'Click to copy URL';
+            overlay.classList.remove('copied');
+          }, 1500);
+        } catch (err) {
+          console.error('Failed to copy URL:', err);
+          overlay.textContent = 'Failed to copy';
+          setTimeout(() => {
+            overlay.textContent = 'Click to copy URL';
+          }, 1500);
+        }
+      });
+    } catch (err) {
+      console.error('Error generating QR code:', err);
+      elements.qrCode.innerHTML = '<p style="color: #ef4444; font-size: 0.8rem;">Failed to generate QR code</p>';
+    }
+  } else {
+    console.error('QR code library not loaded');
+    if (elements.qrCode) {
+      elements.qrCode.innerHTML = '<p style="color: #ef4444; font-size: 0.8rem;">QR library not available</p>';
+    }
+  }
+}
+
 // ==================== INITIALIZATION ====================
 
 async function initializePopup() {
@@ -515,6 +614,8 @@ async function initializePopup() {
 
   if (accessInfo.hasAccess) {
     showMainContent(accessInfo);
+    // Setup ClipboardAuto collapsible section
+    setupClipboardAuto();
   } else {
     showAccessGate();
     setupVoucherForm();
@@ -533,7 +634,7 @@ async function initializePopup() {
 function displayVersion() {
   const version = browser.runtime.getManifest().version;
   const versionText = `v${version}`;
-  
+
   if (elements.versionGate) {
     elements.versionGate.textContent = versionText;
   }

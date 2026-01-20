@@ -80,11 +80,25 @@
       <span>New Update Available</span>
     </a>
 
+    <!-- ClipboardAuto Section -->
+    <div class="clipboard-auto-section">
+      <button class="clipboard-auto-btn" id="clipboard-auto-btn">
+        <span class="clipboard-auto-icon">📋</span>
+        <span class="clipboard-auto-text">ClipboardAuto</span>
+        <span class="clipboard-auto-arrow" id="clipboard-auto-arrow">▼</span>
+      </button>
+      <div class="clipboard-auto-content hidden" id="clipboard-auto-content">
+        <p class="qr-instruction">Scan QR to open on mobile:</p>
+        <div id="qr-code" class="qr-code-container"></div>
+      </div>
+    </div>
+
     <!-- Version Info -->
     <div id="version-main" class="version-info"></div>
   </div>
 
   <script src="browser-polyfill.min.js"></script>
+  <script src="qrcode.min.js"></script>
   <script src="../database/supabase.min.js"></script>
   <script src="index.js"></script>
 </body>
