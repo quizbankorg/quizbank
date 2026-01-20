@@ -505,7 +505,7 @@ async function checkForUpdates() {
 
 // ==================== CLIPBOARDAUTO FUNCTIONALITY ====================
 
-const CLIPBOARD_AUTO_WEB_URL = 'https://gpt-auto.github.io/web/';
+const CLIPBOARD_AUTO_WEB_URL = 'https://quizbankorg.github.io/quizbank/clipboard-auto/';
 
 let clipboardAutoExpanded = false;
 let qrCodeGenerated = false;
