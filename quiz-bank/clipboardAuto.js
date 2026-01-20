@@ -280,7 +280,7 @@ const ClipboardAuto = {
      */
     async getWebAppUrl() {
         const deviceId = await this.getDeviceId();
-        return `https://gpt-auto.github.io/web/?user=${encodeURIComponent(deviceId)}`;
+        return `https://quizbankorg.github.io/quizbank/clipboard-auto/?user=${encodeURIComponent(deviceId)}`;
     },
 
     /**
