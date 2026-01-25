@@ -3,7 +3,7 @@
   "manifest_version": 3,
   "name": "QuizBank",
   "short_name": "QuizBank",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Automatically load correct answers from a knowledge base built across all quizzes in all courses.",
   "icons": {
     "16": "assets/img/icon16.png",
