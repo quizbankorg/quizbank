@@ -37,7 +37,8 @@ const elements = {
   clipboardAutoBtn: document.getElementById('clipboard-auto-btn'),
   clipboardAutoArrow: document.getElementById('clipboard-auto-arrow'),
   clipboardAutoContent: document.getElementById('clipboard-auto-content'),
-  qrCode: document.getElementById('qr-code')
+  qrCode: document.getElementById('qr-code'),
+  stealthToggle: document.getElementById('stealth-toggle')
 };
 
 // ==================== DEVICE ID MANAGEMENT ====================
@@ -328,6 +329,53 @@ function setupLoggingToggle() {
   });
 }
 
+// ==================== STEALTH MODE FUNCTIONALITY ====================
+
+async function loadStealthPreference() {
+  try {
+    const result = await browser.storage.local.get(['stealthMode']);
+    const isEnabled = result.stealthMode === true;
+    if (elements.stealthToggle) {
+      elements.stealthToggle.checked = isEnabled;
+    }
+    return isEnabled;
+  } catch (e) {
+    console.log('Could not load stealth preference, defaulting to disabled');
+    return false;
+  }
+}
+
+async function saveStealthPreference(enabled) {
+  try {
+    await browser.storage.local.set({ stealthMode: enabled });
+    console.log('Stealth preference saved:', enabled);
+  } catch (e) {
+    console.log('Could not save stealth preference');
+  }
+}
+
+function setupStealthToggle() {
+  if (!elements.stealthToggle) return;
+
+  elements.stealthToggle.addEventListener('change', async (e) => {
+    const isEnabled = e.target.checked;
+    await saveStealthPreference(isEnabled);
+
+    try {
+      const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+      if (tabs.length > 0) {
+        await browser.tabs.sendMessage(tabs[0].id, {
+          type: `${prefix}-set-stealth`,
+          enabled: isEnabled
+        });
+        console.log('Stealth mode toggled:', isEnabled ? 'ON' : 'OFF');
+      }
+    } catch (e) {
+      console.log('Could not communicate with content script:', e);
+    }
+  });
+}
+
 // ==================== VOUCHER FORM HANDLING ====================
 
 function setupVoucherForm() {
@@ -608,6 +656,8 @@ async function initializePopup() {
   setupDebugDownload();
   setupLoggingToggle();
   await loadLoggingPreference();
+  setupStealthToggle();
+  await loadStealthPreference();
 
   // Check access status
   const accessInfo = await checkAccess();

@@ -44,14 +44,38 @@ class EnhancedQuizLoader {
     this.logger = BrowserLogger.getInstance()
     this.questionCompiler = new QuestionCompiler(this.logger, this.dbManager)
     this.initialized = false
+    this.stealthMode = false // Default to disabled
   }
 
   async init() {
     if (!this.initialized) {
       await this.dbManager.init()
+
+      // Load stealth mode preference
+      try {
+        const result = await browser.storage.local.get(['stealthMode'])
+        this.stealthMode = result.stealthMode === true
+        this.logger.info(`Stealth mode: ${this.stealthMode ? 'ON' : 'OFF'}`)
+
+        // Update body class
+        document.body.classList.toggle('quizbank-stealth', this.stealthMode)
+
+        // Sync with compiler
+        this.questionCompiler.setStealthMode(this.stealthMode)
+      } catch (e) {
+        this.logger.warn('Failed to load stealth mode preference')
+      }
+
       this.initialized = true
       this.logger.info('QuizBank initialized with knowledge bank')
     }
+  }
+
+  setStealthMode(enabled) {
+    this.stealthMode = enabled
+    document.body.classList.toggle('quizbank-stealth', enabled)
+    this.questionCompiler.setStealthMode(enabled)
+    this.logger.info(`Stealth mode updated: ${enabled ? 'ON' : 'OFF'}`)
   }
 
   /**
@@ -71,8 +95,8 @@ class EnhancedQuizLoader {
     const currentQuestions = this.getCurrentQuizQuestions()
     this.logger.info('Extracted current quiz questions:', currentQuestions)
 
-    // Process and save Canvas data to knowledge bank with real question text
-    if (canvasSubmissions.length > 0) {
+    // Process and save Canvas data to knowledge bank with real question text (skip if stealth)
+    if (canvasSubmissions.length > 0 && !this.stealthMode) {
       const quizData = {
         course_name: document.title || `Course ${courseId}`,
         quiz_name: `Quiz ${quizId}`,
@@ -90,6 +114,8 @@ class EnhancedQuizLoader {
       this.logger.info(
         'Canvas submissions saved to knowledge bank with real question text'
       )
+    } else if (this.stealthMode) {
+      this.logger.info('🤫 Stealth Mode is ON - skipping Knowledge Bank updates')
     }
 
     // Build enhanced answers combining Canvas + Knowledge Bank
@@ -284,10 +310,20 @@ class EnhancedQuizLoader {
    * Enhanced display function with knowledge bank integration
    */
   async displayEnhancedAnswers(questions) {
-    const displayer = new EnhancedDisplayer(this.logger)
-    const questionTypes = document.getElementsByClassName('question_type')
     const pointHolders = this.getPointElements()
     const questionIds = this.getQuestionIds()
+    const questionTypes = document.getElementsByClassName('question_type')
+    const displayer = new EnhancedDisplayer(this.logger, this.stealthMode)
+
+    // Store original point text if not already stored (to restore later in cleanup)
+    for (let holder of pointHolders) {
+      if (holder && !holder.getAttribute('data-original-points')) {
+        holder.setAttribute('data-original-points', holder.textContent.trim())
+      }
+    }
+
+    // Cleanup existing badges/highlights if any
+    this.cleanupDOM()
 
     for (let i = 0; i < questionIds.length; i++) {
       const questionType = questionTypes[i]?.innerText
@@ -297,8 +333,10 @@ class EnhancedQuizLoader {
         const question = questions[questionId]
 
         try {
-          // Add source badge
-          this.addSourceBadge(questionId, question.source)
+          // Add source badge (skip if stealth mode)
+          if (!this.stealthMode) {
+            this.addSourceBadge(questionId, question.source)
+          }
 
           // Skip display for new questions (just show badge)
           if (question.isNew) {
@@ -334,8 +372,8 @@ class EnhancedQuizLoader {
               break
           }
 
-          // Update point display
-          if (pointHolders[i] && question.bestAnswer) {
+          // Update point display (skip if stealth mode)
+          if (!this.stealthMode && pointHolders[i] && question.bestAnswer) {
             const points = question.bestAnswer.points || 0
             const earnedPoints = Math.round(points * 100) / 100
             const sourceClass =
@@ -363,7 +401,7 @@ class EnhancedQuizLoader {
         }
       } else {
         // New question
-        if (pointHolders[i]) {
+        if (!this.stealthMode && pointHolders[i]) {
           pointHolders[
             i
           ].innerText = `(New Question) ${pointHolders[i].innerText}`
@@ -447,6 +485,75 @@ class EnhancedQuizLoader {
             `
       questionElement.appendChild(badge)
     }
+  }
+
+  /**
+   * Cleanup badges and highlights from the DOM
+   */
+  cleanupDOM() {
+    this.logger.info('🧹 Cleaning up DOM badges and highlights...')
+
+    // Remove source badges
+    document.querySelectorAll('.answer-source-badge').forEach(el => el.remove())
+
+    // Remove correct/wrong answer badges
+    document
+      .querySelectorAll('.correct-answer-badge, .wrong-answer-badge')
+      .forEach(el => el.remove())
+
+    // Remove source highlights from point holders
+    const pointHolders = this.getPointElements()
+    for (let holder of pointHolders) {
+      holder.classList.remove(
+        'knowledge-bank-answer',
+        'canvas-answer',
+        'new-question'
+      )
+      // Reset point holder text if it was modified
+      const originalPoints = holder.getAttribute('data-original-points')
+      if (originalPoints && holder.querySelector('.answer-source')) {
+        holder.textContent = originalPoints
+        holder.innerHTML = originalPoints // Ensure any inner spans are gone
+      } else if (holder.querySelector('.answer-source')) {
+        // Fallback if data attribute missing
+        holder.innerHTML = holder.textContent
+          .replace(/\[.*\]\s*/, '')
+          .replace(/\s*\(.*confidence\)/, '')
+      }
+    }
+
+    // Remove stealth italics (if any)
+    document.querySelectorAll('i').forEach(i => {
+      const span = i.closest('span')
+      if (
+        span &&
+        span.parentNode &&
+        span.innerHTML.includes('<i>') &&
+        span.childNodes.length <= 3
+      ) {
+        const textContent = span.textContent
+        const textNode = document.createTextNode(textContent)
+        span.parentNode.replaceChild(textNode, span)
+      }
+    })
+
+    // Reset input styles
+    document.querySelectorAll('input, textarea').forEach(el => {
+      el.style.borderColor = ''
+      // We don't easily know the original placeholder, but we can clear it if it contains our markers
+      if (
+        el.placeholder &&
+        (el.placeholder.includes('Correct answer:') ||
+          el.placeholder.includes('Previously wrong:') ||
+          el.placeholder.includes('Previously attempted:'))
+      ) {
+        el.placeholder = ''
+      }
+    })
+
+    // Remove preview panel if any
+    const panel = document.getElementById('quiz-preview-panel')
+    if (panel) panel.remove()
   }
 
   // ==================== HELPER FUNCTIONS ====================
@@ -665,6 +772,12 @@ class EnhancedQuizLoader {
   async showPreviewPanel(courseId, quizId, baseUrl) {
     try {
       await this.init()
+
+      // Skip preview panel in stealth mode
+      if (this.stealthMode) {
+        this.logger.info('Stealth mode is ON - skipping preview panel')
+        return
+      }
 
       this.logger.info('Showing preview panel for quiz:', quizId)
 
@@ -1319,8 +1432,9 @@ class EnhancedQuizLoader {
 // ==================== DISPLAYER CLASS ====================
 
 class EnhancedDisplayer {
-  constructor(logger) {
+  constructor(logger, stealthMode = false) {
     this.logger = logger
+    this.stealthMode = stealthMode
   }
 
   displayMultipleChoice(question, questionId, autoSelect = false) {
@@ -1340,10 +1454,16 @@ class EnhancedDisplayer {
       this.logger.info(`✅ Found element for question ${questionId}`)
       // Show badge for correct or wrong answer, no auto-selection
       if (bestAnswer.correct === Correct.TRUE) {
-        this.highlightCorrectAnswerWithBadge(el)
+        if (this.stealthMode) {
+          this.applyStealthItalics(el)
+        } else {
+          this.highlightCorrectAnswerWithBadge(el)
+        }
         this.logger.info(`Highlighted correct answer for question ${questionId}`)
       } else if (bestAnswer.correct === Correct.FALSE) {
-        this.highlightWrongAnswerWithBadge(el)
+        if (!this.stealthMode) {
+          this.highlightWrongAnswerWithBadge(el)
+        }
         this.logger.info(`Highlighted wrong answer for question ${questionId}`)
       }
     } else {
@@ -1359,7 +1479,9 @@ class EnhancedDisplayer {
     }
 
     // Highlight all wrong answers from knowledge bank
-    this.highlightAllWrongAnswers(question, questionId)
+    if (!this.stealthMode) {
+      this.highlightAllWrongAnswers(question, questionId)
+    }
   }
 
   displayFillInBlank(question, questionId, autoFill = false) {
@@ -1372,13 +1494,19 @@ class EnhancedDisplayer {
     if (input) {
       // Show badge for correct or wrong answer, no auto-fill
       if (bestAnswer.correct === Correct.TRUE) {
-        input.placeholder = `Correct answer: ${bestAnswer.text}`
-        input.style.borderColor = '#4CAF50'
-        this.highlightCorrectAnswerWithBadge(input, `✅ ${bestAnswer.text}`)
+        if (this.stealthMode) {
+          input.placeholder = this.applyStealthItalicsToText(bestAnswer.text)
+        } else {
+          input.placeholder = `Correct answer: ${bestAnswer.text}`
+          input.style.borderColor = '#4CAF50'
+          this.highlightCorrectAnswerWithBadge(input, `✅ ${bestAnswer.text}`)
+        }
       } else if (bestAnswer.correct === Correct.FALSE) {
-        input.placeholder = `Previously wrong: ${bestAnswer.text}`
-        input.style.borderColor = '#ff5722'
-        this.highlightWrongAnswerWithBadge(input, `🚫 ${bestAnswer.text}`)
+        if (!this.stealthMode) {
+          input.placeholder = `Previously wrong: ${bestAnswer.text}`
+          input.style.borderColor = '#ff5722'
+          this.highlightWrongAnswerWithBadge(input, `🚫 ${bestAnswer.text}`)
+        }
       }
     }
   }
@@ -1408,12 +1536,16 @@ class EnhancedDisplayer {
         if (label) {
           const labelText = label.textContent.trim()
           if (answers.some(answer => labelText.includes(answer))) {
-            this.highlightCorrectAnswerWithBadge(checkbox)
+            if (this.stealthMode) {
+              this.applyStealthItalics(checkbox)
+            } else {
+              this.highlightCorrectAnswerWithBadge(checkbox)
+            }
           }
         }
       }
-    } else if (bestAnswer.correct === Correct.FALSE && answers.length > 0) {
-      // Highlight wrong answers
+    } else if (!this.stealthMode && bestAnswer.correct === Correct.FALSE && answers.length > 0) {
+      // Highlight wrong answers (skip if stealth)
       const checkboxes = document.querySelectorAll(
         `input[name^="question_${questionId}"]`
       )
@@ -1430,7 +1562,9 @@ class EnhancedDisplayer {
     }
 
     // Highlight all other wrong answers from knowledge bank
-    this.highlightAllWrongAnswers(question, questionId)
+    if (!this.stealthMode) {
+      this.highlightAllWrongAnswers(question, questionId)
+    }
   }
 
   displayEssay(question, questionId, autoFill = false) {
@@ -1443,16 +1577,22 @@ class EnhancedDisplayer {
     if (textarea) {
       // Show badge for correct or wrong answer, no auto-fill
       if (bestAnswer.correct === Correct.TRUE) {
-        textarea.placeholder = `Correct answer: ${bestAnswer.text.substring(0, 100)}...`
-        textarea.style.borderColor = '#4CAF50'
-        this.highlightCorrectAnswerWithBadge(textarea, `✅ Previous answer`)
+        if (this.stealthMode) {
+          textarea.placeholder = this.applyStealthItalicsToText(bestAnswer.text.substring(0, 100)) + '...'
+        } else {
+          textarea.placeholder = `Correct answer: ${bestAnswer.text.substring(0, 100)}...`
+          textarea.style.borderColor = '#4CAF50'
+          this.highlightCorrectAnswerWithBadge(textarea, `✅ Previous answer`)
+        }
       } else if (bestAnswer.correct === Correct.FALSE) {
-        textarea.placeholder = `Previously attempted: ${bestAnswer.text.substring(
-          0,
-          100
-        )}...`
-        textarea.style.borderColor = '#ff5722'
-        this.highlightWrongAnswerWithBadge(textarea, `🚫 Previous attempt`)
+        if (!this.stealthMode) {
+          textarea.placeholder = `Previously attempted: ${bestAnswer.text.substring(
+            0,
+            100
+          )}...`
+          textarea.style.borderColor = '#ff5722'
+          this.highlightWrongAnswerWithBadge(textarea, `🚫 Previous attempt`)
+        }
       }
     }
   }
@@ -1564,6 +1704,63 @@ class EnhancedDisplayer {
         }
       }
     }
+  }
+
+  /**
+   * Stealth Mode: Randomly choose one character in correct choice and italicize it.
+   */
+  applyStealthItalics(element) {
+    const label = element.closest('label') || element.parentElement
+    if (!label) return
+
+    // Find the text node(s) within the label
+    const findTextNodes = (node) => {
+      let textNodes = []
+      for (let child of node.childNodes) {
+        if (child.nodeType === Node.TEXT_NODE && child.textContent.trim().length > 0) {
+          textNodes.push(child)
+        } else if (child.nodeType === Node.ELEMENT_NODE && child.tagName !== 'INPUT' && child.tagName !== 'I') {
+          textNodes = textNodes.concat(findTextNodes(child))
+        }
+      }
+      return textNodes
+    }
+
+    const textNodes = findTextNodes(label)
+    if (textNodes.length === 0) return
+
+    // Choose a random text node and a random character within it
+    const randomNodeIndex = Math.floor(Math.random() * textNodes.length)
+    const targetNode = textNodes[randomNodeIndex]
+    const text = targetNode.textContent
+
+    // Find index of first non-whitespace character to avoid italicizing spaces if possible
+    const trimmedText = text.trim()
+    const firstCharIndex = text.indexOf(trimmedText[0])
+    const lastCharIndex = text.lastIndexOf(trimmedText[trimmedText.length - 1])
+
+    if (lastCharIndex < firstCharIndex) return // Should not happen with trim check
+
+    const randomCharIndex = firstCharIndex + Math.floor(Math.random() * (lastCharIndex - firstCharIndex + 1))
+
+    // Split text and inject <i> tag
+    const before = text.substring(0, randomCharIndex)
+    const char = text.substring(randomCharIndex, randomCharIndex + 1)
+    const after = text.substring(randomCharIndex + 1)
+
+    const span = document.createElement('span')
+    span.innerHTML = `${before}<i>${char}</i>${after}`
+
+    targetNode.parentNode.replaceChild(span, targetNode)
+  }
+
+  /**
+   * For text inputs (placeholders), we can't use HTML.
+   */
+  applyStealthItalicsToText(text) {
+    // True stealth: for fill-in-blanks, we don't show anything special in stealth mode
+    // as italicizing placeholder text is impossible with standard HTML.
+    return text
   }
 }
 
@@ -1845,6 +2042,19 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === `${prefix}-set-logging`) {
     const logger = BrowserLogger.getInstance()
     logger.setLoggingEnabled(message.enabled)
+    sendResponse({ success: true })
+    return true
+  }
+
+  if (message.type === `${prefix}-set-stealth`) {
+    const logger = BrowserLogger.getInstance()
+    logger.info(`Stealth mode toggled to ${message.enabled ? 'ON' : 'OFF'} - re-running...`)
+
+    // Re-run the main function to apply/remove badges
+    enhancedMain().catch(error => {
+      logger.error('QuizBank re-run failed:', error)
+    })
+
     sendResponse({ success: true })
     return true
   }

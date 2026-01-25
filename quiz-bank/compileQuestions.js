@@ -8,6 +8,7 @@ class QuestionCompiler {
   constructor(logger, supabaseManager = null) {
     this.logger = logger || new NoOpLogger()
     this.supabaseManager = supabaseManager
+    this.stealthMode = false // Default to disabled
 
     if (!this.supabaseManager) {
       this.logger.warn('⚠️ QuestionCompiler initialized without database manager')
@@ -15,9 +16,21 @@ class QuestionCompiler {
   }
 
   /**
+   * Set stealth mode status
+   */
+  setStealthMode(enabled) {
+    this.stealthMode = enabled
+  }
+
+  /**
    * Capture a single question's HTML from the DOM
    */
   async captureQuestion(questionId, quizId, courseId) {
+    if (this.stealthMode) {
+      this.logger.info('🤫 Stealth Mode is ON - skipping question capture')
+      return null
+    }
+
     try {
       // Find the question container
       const questionContainer = document.getElementById(`question_${questionId}`)
