@@ -1598,15 +1598,61 @@ class EnhancedDisplayer {
   }
 
   displayMatching(question, questionId) {
-    this.logger.info(
-      `Matching questions not fully supported yet for question ${questionId}`
+    this.logger.info(`Displaying matching for question ${questionId}`)
+
+    const bestAnswer = question.bestAnswer
+    if (!bestAnswer) return
+
+    const fields = bestAnswer.dynamicFields || {}
+
+    // Find all dropdowns for this question
+    const selects = document.querySelectorAll(
+      `select[name^="question_${questionId}"]`
     )
+
+    for (const select of selects) {
+      // The name might be "question_22401888_answer_3390"
+      // Fields usually contain "answer_3390": "7730"
+      const answerKey = select.name.replace(`question_${questionId}_`, '')
+      let matchValue = fields[answerKey] || fields[select.name]
+
+      if (matchValue !== undefined && matchValue !== null) {
+        // Find if this value exists in options by value
+        const optionExists = Array.from(select.options).some(opt => opt.value == matchValue)
+
+        let matched = false
+        if (optionExists) {
+          select.value = matchValue
+          matched = true
+        } else {
+          // Fallback: matchValue might be text content
+          const optionByText = Array.from(select.options).find(opt => opt.text.trim() === String(matchValue).trim() || opt.text.includes(String(matchValue)))
+          if (optionByText) {
+            select.value = optionByText.value
+            matched = true
+          }
+        }
+
+        if (matched) {
+          if (bestAnswer.correct === Correct.TRUE) {
+            if (!this.stealthMode) {
+              select.style.borderColor = '#4CAF50'
+              this.highlightCorrectAnswerWithBadge(select, '✅ Previous answer')
+            }
+          } else if (bestAnswer.correct === Correct.FALSE) {
+            if (!this.stealthMode) {
+              select.style.borderColor = '#ff5722'
+              this.highlightWrongAnswerWithBadge(select, '🚫 Previous attempt')
+            }
+          }
+        }
+      }
+    }
   }
 
   displayMultipleDropdowns(question, questionId) {
-    this.logger.info(
-      `Multiple dropdown questions not fully supported yet for question ${questionId}`
-    )
+    this.logger.info(`Displaying multiple dropdowns for question ${questionId}`)
+    this.displayMatching(question, questionId)
   }
 
   displayFillInMultipleBlank(question, questionId) {
