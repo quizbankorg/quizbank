@@ -911,7 +911,7 @@ class SupabaseQuizManager {
                     if (textSource === 'placeholder') {
                         // Don't generate hash from placeholder - use Canvas ID as temporary hash
                         // This will be regenerated when real content becomes available
-                        questionHash = `canvas_${questionId}_${courseId}`;
+                        questionHash = `canvas_${questionId}`;
                         if (this.logger) {
                             this.logger.info(`📝 Using temporary hash for placeholder question ${questionId}: ${questionHash}`);
                         }
