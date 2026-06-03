@@ -35,10 +35,13 @@ const elements = {
   versionMain: document.getElementById('version-main'),
   // ClipboardAuto elements
   clipboardAutoBtn: document.getElementById('clipboard-auto-btn'),
+  clipboardAutoSection: document.getElementById('clipboard-auto-section'),
   clipboardAutoArrow: document.getElementById('clipboard-auto-arrow'),
   clipboardAutoContent: document.getElementById('clipboard-auto-content'),
   qrCode: document.getElementById('qr-code'),
-  stealthToggle: document.getElementById('stealth-toggle')
+  stealthToggle: document.getElementById('stealth-toggle'),
+  aiToggle: document.getElementById('ai-toggle'),
+  clipboardToggle: document.getElementById('clipboard-toggle')
 };
 
 // ==================== DEVICE ID MANAGEMENT ====================
@@ -376,36 +379,113 @@ function setupStealthToggle() {
   });
 }
 
+// ==================== AI MODE FUNCTIONALITY ====================
+
+async function loadAIPreference() {
+  try {
+    const result = await browser.storage.local.get(['aiMode']);
+    const isEnabled = result.aiMode !== false; // default enabled
+    if (elements.aiToggle) {
+      elements.aiToggle.checked = isEnabled;
+    }
+    return isEnabled;
+  } catch (e) {
+    console.log('Could not load AI preference, defaulting to enabled');
+    return true;
+  }
+}
+
+async function saveAIPreference(enabled) {
+  try {
+    await browser.storage.local.set({ aiMode: enabled });
+    console.log('AI preference saved:', enabled);
+  } catch (e) {
+    console.log('Could not save AI preference');
+  }
+}
+
+function setupAIToggle() {
+  if (!elements.aiToggle) return;
+
+  elements.aiToggle.addEventListener('change', async (e) => {
+    const isEnabled = e.target.checked;
+    await saveAIPreference(isEnabled);
+
+    try {
+      const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+      if (tabs.length > 0) {
+        await browser.tabs.sendMessage(tabs[0].id, {
+          type: `${prefix}-set-ai`,
+          enabled: isEnabled
+        });
+        console.log('AI mode toggled:', isEnabled ? 'ON' : 'OFF');
+      }
+    } catch (e) {
+      console.log('Could not communicate with content script:', e);
+    }
+  });
+}
+
+// ==================== CLIPBOARD AUTO FUNCTIONALITY ====================
+
+function updateClipboardSectionVisibility(isEnabled) {
+  if (elements.clipboardAutoSection) {
+    elements.clipboardAutoSection.classList.toggle('hidden', !isEnabled);
+  }
+}
+
+async function loadClipboardPreference() {
+  try {
+    const result = await browser.storage.local.get(['clipboardAutoEnabled']);
+    const isEnabled = result.clipboardAutoEnabled !== false; // default enabled
+    if (elements.clipboardToggle) {
+      elements.clipboardToggle.checked = isEnabled;
+    }
+    updateClipboardSectionVisibility(isEnabled);
+    return isEnabled;
+  } catch (e) {
+    console.log('Could not load ClipboardAuto preference, defaulting to enabled');
+    return true;
+  }
+}
+
+async function saveClipboardPreference(enabled) {
+  try {
+    await browser.storage.local.set({ clipboardAutoEnabled: enabled });
+    console.log('ClipboardAuto preference saved:', enabled);
+  } catch (e) {
+    console.log('Could not save ClipboardAuto preference');
+  }
+}
+
+function setupClipboardToggle() {
+  if (!elements.clipboardToggle) return;
+
+  elements.clipboardToggle.addEventListener('change', async (e) => {
+    const isEnabled = e.target.checked;
+    await saveClipboardPreference(isEnabled);
+    updateClipboardSectionVisibility(isEnabled);
+
+    try {
+      const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+      if (tabs.length > 0) {
+        await browser.tabs.sendMessage(tabs[0].id, {
+          type: `${prefix}-set-clipboard`,
+          enabled: isEnabled
+        });
+        console.log('ClipboardAuto toggled:', isEnabled ? 'ON' : 'OFF');
+      }
+    } catch (e) {
+      console.log('Could not communicate with content script:', e);
+    }
+  });
+}
+
 // ==================== VOUCHER FORM HANDLING ====================
 
 function setupVoucherForm() {
-  // Simple formatting - just uppercase and allow alphanumeric + dashes
-  elements.voucherInput.addEventListener('input', (e) => {
-    e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, '');
-    hideError();
-  });
-
-  // Handle paste explicitly (some browsers block paste in extension popups)
-  elements.voucherInput.addEventListener('paste', (e) => {
-    e.preventDefault();
-    const pastedText = (e.clipboardData || window.clipboardData).getData('text');
-    const cleaned = pastedText.toUpperCase().replace(/[^A-Z0-9-]/g, '');
-
-    // Insert at cursor position or replace selection
-    const input = e.target;
-    const start = input.selectionStart;
-    const end = input.selectionEnd;
-    const currentValue = input.value;
-
-    const newValue = currentValue.substring(0, start) + cleaned + currentValue.substring(end);
-    input.value = newValue.substring(0, 20); // Respect maxlength
-
-    // Move cursor to end of pasted content
-    const newCursorPos = Math.min(start + cleaned.length, 20);
-    input.setSelectionRange(newCursorPos, newCursorPos);
-
-    hideError();
-  });
+  // No client-side validation/formatting - the server validates the code.
+  elements.voucherInput.addEventListener('input', hideError);
 
   // Handle Enter key
   elements.voucherInput.addEventListener('keypress', (e) => {
@@ -420,16 +500,6 @@ function setupVoucherForm() {
 
 async function handleActivate() {
   const code = elements.voucherInput.value.trim();
-
-  if (!code) {
-    showError('Please enter an access code');
-    return;
-  }
-
-  if (code.length < 5) {
-    showError('Access code is too short');
-    return;
-  }
 
   setLoading(true);
   hideError();
@@ -658,6 +728,10 @@ async function initializePopup() {
   await loadLoggingPreference();
   setupStealthToggle();
   await loadStealthPreference();
+  setupAIToggle();
+  await loadAIPreference();
+  setupClipboardToggle();
+  await loadClipboardPreference();
 
   // Check access status
   const accessInfo = await checkAccess();

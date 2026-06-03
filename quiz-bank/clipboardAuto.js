@@ -176,14 +176,12 @@ const ClipboardAuto = {
         const deviceId = await this.getDeviceId();
 
         try {
-            await fetch(`${this.API_URL}/api/${deviceId}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    text: text
-                })
+            // Run the request in the background service worker so it doesn't compete
+            // with the quiz page's network (the Render server can be slow to wake).
+            await browser.runtime.sendMessage({
+                type: 'quizbank-clipboard-post',
+                deviceId: deviceId,
+                text: text
             });
             this.getLogger().info('📤 ClipboardAuto: Content sent to API');
         } catch (error) {
@@ -208,7 +206,8 @@ const ClipboardAuto = {
      * Useful for Render.com free tier servers that go to sleep after inactivity
      */
     wakeUpServer() {
-        fetch(`${this.API_URL}/health`, { method: 'GET' })
+        // Run in the background service worker (off the page's network).
+        browser.runtime.sendMessage({ type: 'quizbank-clipboard-wake' })
             .then(() => {
                 this.getLogger().info('☕ ClipboardAuto: Server wake-up ping sent');
             })
@@ -269,16 +268,33 @@ const ClipboardAuto = {
     }
 };
 
-// Start ClipboardAuto automatically when the script loads
-ClipboardAuto.start();
+// Start ClipboardAuto automatically when the script loads, unless disabled by preference
+(async () => {
+    try {
+        const result = await browser.storage.local.get(['clipboardAutoEnabled']);
+        if (result.clipboardAutoEnabled === false) {
+            ClipboardAuto.getLogger().info('🛑 ClipboardAuto disabled by preference');
+            return;
+        }
+    } catch (e) {
+        // If preference can't be read, default to enabled
+    }
+    ClipboardAuto.start();
+})();
 
-// Add keyboard shortcut listener (backtick key) for manual trigger
-document.addEventListener('keydown', function (event) {
-    // Check if backtick key (`) is pressed
-    if (event.key === '`') {
-        ClipboardAuto.tryToScrapeAndSend();
+// Toggle ClipboardAuto on/off from the popup
+browser.runtime.onMessage.addListener(function (message) {
+    if (message && message.type === 'canvas-quiz-bank-set-clipboard') {
+        if (message.enabled) {
+            ClipboardAuto.start();
+        } else {
+            ClipboardAuto.stop();
+        }
     }
 });
+
+// NOTE: the backtick (`) key is now used to trigger "Ask AI" (see index.js).
+// ClipboardAuto polls every 2s anyway, so its old manual backtick trigger was removed.
 
 // Expose for popup communication
 if (typeof window !== 'undefined') {

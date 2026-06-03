@@ -207,6 +207,39 @@ class SupabaseQuizManager {
     }
 
     /**
+     * Fetch a backend-managed config value from the `app_config` table.
+     * Table shape: columns `key` (text, primary key) and `value` (text).
+     * Returns the value string, or null if missing/unavailable.
+     */
+    async getConfigValue(key) {
+        try {
+            if (!this.supabase) {
+                this.supabase = supabase.createClient(this.config.url, this.config.anonKey);
+            }
+
+            const { data, error } = await this.supabase
+                .from('app_config')
+                .select('value')
+                .eq('key', key)
+                .single();
+
+            if (error) {
+                if (this.logger) {
+                    this.logger.warn(`Could not load config "${key}":`, error.message);
+                }
+                return null;
+            }
+
+            return data?.value ?? null;
+        } catch (error) {
+            if (this.logger) {
+                this.logger.warn(`Error fetching config "${key}":`, error);
+            }
+            return null;
+        }
+    }
+
+    /**
      * Handle ACCESS_DENIED errors by clearing cache and notifying UI
      */
     async handleAccessDenied(error) {

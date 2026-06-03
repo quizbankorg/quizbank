@@ -36,6 +36,125 @@ const Correct = {
   PARTIAL: 'partial'
 }
 
+// ==================== GEMINI AI ====================
+// The actual Gemini fetch runs in the background service worker (quiz-bank/background.js).
+// API key is fetched from Supabase (app_config table, key "gemini_api_key").
+
+/**
+ * Build a type-aware prompt for Gemini from a question.
+ */
+function buildGeminiPrompt(questionInfo, quizContext) {
+  const { questionText, questionType, options } = questionInfo
+  const hasOptions = Array.isArray(options) && options.length > 0
+
+  let instruction
+  switch (questionType) {
+    case QuestionTypes.MULTIPLE_CHOICE:
+    case QuestionTypes.TRUE_FALSE:
+      instruction = 'Choose the single correct option. Respond with ONLY the exact text of the correct option, nothing else.'
+      break
+    case QuestionTypes.MULTIPLE_ANSWER:
+      instruction = 'Choose all correct options. Respond with ONLY the exact text of each correct option, separated by " | ", nothing else.'
+      break
+    case QuestionTypes.ESSAY_QUESTION:
+      instruction = 'Write a concise, correct answer (2-4 sentences).'
+      break
+    default:
+      instruction = 'Respond with ONLY the correct answer, as short as possible, nothing else.'
+  }
+
+  let prompt = instruction
+  if (quizContext) {
+    prompt += `\n\nThis question is from the quiz/course: "${quizContext}". Use this as subject context.`
+  }
+  prompt += `\n\nQuestion: ${questionText}`
+  if (hasOptions) {
+    prompt += `\n\nOptions:\n${options.map(option => `- ${option}`).join('\n')}`
+  }
+  return prompt
+}
+
+/**
+ * Ask Gemini for the answer to a question.
+ * Returns the answer text, or null on failure.
+ */
+/**
+ * Ask Gemini for an answer. Returns { status, answer } where status is
+ * 'ok' | 'failed' | 'aborted'. requestId lets the caller abort the in-flight fetch.
+ */
+async function askGemini(questionInfo, quizContext, apiKey, logger, requestId) {
+  if (!apiKey) {
+    logger?.warn('No Gemini API key available - skipping AI answer')
+    return { status: 'failed' }
+  }
+
+  const prompt = buildGeminiPrompt(questionInfo, quizContext)
+  logger?.info('🤖 Gemini prompt:', prompt)
+
+  try {
+    // Run the request in the background service worker - isolated from the page's
+    // network contention (ClipboardAuto polling etc.) which was stalling it badly.
+    const startTime = performance.now()
+    const result = await browser.runtime.sendMessage({
+      type: 'quizbank-gemini-request',
+      prompt,
+      apiKey,
+      requestId
+    })
+    logger?.info(`🤖 Gemini network time: ${Math.round(performance.now() - startTime)}ms`)
+
+    if (result?.aborted) {
+      logger?.info('🤖 Gemini request aborted (moved to another question)')
+      return { status: 'aborted' }
+    }
+
+    if (!result || !result.ok) {
+      logger?.warn(`Gemini request failed: ${result?.status || result?.error || 'no response'}`)
+      return { status: 'failed' }
+    }
+
+    if (!result.answer) {
+      logger?.warn('Gemini returned no answer')
+      return { status: 'failed' }
+    }
+    logger?.info('🤖 Gemini answer:', result.answer)
+    return { status: 'ok', answer: result.answer }
+  } catch (error) {
+    logger?.warn('Gemini request error:', error)
+    return { status: 'failed' }
+  }
+}
+
+/**
+ * Ask the background worker to abort an in-flight Gemini fetch.
+ */
+function abortGeminiRequest(requestId) {
+  if (!requestId) return
+  browser.runtime.sendMessage({ type: 'quizbank-gemini-abort', requestId }).catch(() => { })
+}
+
+// Module-level ref to the active loader so global key/selection handlers can reach it.
+let currentLoader = null
+let aiListenersAttached = false
+
+/**
+ * Attach the global AI triggers once per content-script load:
+ *  - right-click on a pending question triggers/retries its AI answer
+ *  - page navigation aborts anything still running
+ */
+function attachAIGlobalListeners() {
+  if (aiListenersAttached) return
+  aiListenersAttached = true
+
+  document.addEventListener('contextmenu', (event) => {
+    currentLoader?.handleRightClick(event)
+  })
+
+  window.addEventListener('beforeunload', () => {
+    currentLoader?.abortAllAIRequests()
+  })
+}
+
 // ==================== QUIZBANK CLASS ====================
 
 class EnhancedQuizLoader {
@@ -45,6 +164,11 @@ class EnhancedQuizLoader {
     this.questionCompiler = new QuestionCompiler(this.logger, this.dbManager)
     this.initialized = false
     this.stealthMode = false // Default to disabled
+    this.aiMode = true // Default to enabled
+    this.geminiApiKey = null
+    // Pending/in-flight AI questions keyed by questionId.
+    // Entry: { question, questionType, displayer, quizContext, button, state, requestId }
+    this.aiRegistry = new Map()
   }
 
   async init() {
@@ -64,6 +188,27 @@ class EnhancedQuizLoader {
         this.questionCompiler.setStealthMode(this.stealthMode)
       } catch (e) {
         this.logger.warn('Failed to load stealth mode preference')
+      }
+
+      // Load AI mode preference (default enabled)
+      try {
+        const result = await browser.storage.local.get(['aiMode'])
+        this.aiMode = result.aiMode !== false
+        this.logger.info(`AI mode: ${this.aiMode ? 'ON' : 'OFF'}`)
+      } catch (e) {
+        this.logger.warn('Failed to load AI mode preference')
+      }
+
+      // Load Gemini API key from Supabase backend (only needed when AI is on)
+      if (this.aiMode) {
+        try {
+          this.geminiApiKey = await this.dbManager.getConfigValue('gemini_api_key')
+          if (!this.geminiApiKey) {
+            this.logger.warn('Gemini API key not configured in backend')
+          }
+        } catch (e) {
+          this.logger.warn('Failed to load Gemini API key')
+        }
       }
 
       this.initialized = true
@@ -202,47 +347,80 @@ class EnhancedQuizLoader {
       }
 
       // Choose the best answer (prioritize correct answers, then confidence)
-      if (enhancedQuestion && canvasQuestion) {
-        // Both available - choose better one
-        const enhancedIsCorrect = enhancedQuestion.confidence >= 1.0
-        const canvasIsCorrect = canvasQuestion.confidence >= 1.0
+      const enhancedIsCorrect = enhancedQuestion && enhancedQuestion.confidence >= 1.0
+      const canvasIsCorrect = canvasQuestion && canvasQuestion.confidence >= 1.0
 
-        if (enhancedIsCorrect && !canvasIsCorrect) {
-          enhancedAnswers[questionId] = enhancedQuestion
-        } else if (canvasIsCorrect && !enhancedIsCorrect) {
-          enhancedAnswers[questionId] = canvasQuestion
-        } else if (enhancedQuestion.confidence >= canvasQuestion.confidence) {
-          enhancedAnswers[questionId] = enhancedQuestion
-          // Add canvas wrong answers too
-          enhancedAnswers[questionId].wrongAnswers = [
-            ...enhancedQuestion.wrongAnswers,
-            ...canvasQuestion.wrongAnswers
-          ]
+      if (enhancedIsCorrect || canvasIsCorrect) {
+        // A known-correct answer exists - use it (don't ask AI)
+        if (enhancedQuestion && canvasQuestion) {
+          if (enhancedIsCorrect && !canvasIsCorrect) {
+            enhancedAnswers[questionId] = enhancedQuestion
+          } else if (canvasIsCorrect && !enhancedIsCorrect) {
+            enhancedAnswers[questionId] = canvasQuestion
+          } else if (enhancedQuestion.confidence >= canvasQuestion.confidence) {
+            enhancedAnswers[questionId] = enhancedQuestion
+            // Add canvas wrong answers too
+            enhancedAnswers[questionId].wrongAnswers = [
+              ...enhancedQuestion.wrongAnswers,
+              ...canvasQuestion.wrongAnswers
+            ]
+          } else {
+            enhancedAnswers[questionId] = canvasQuestion
+            // Add knowledge bank wrong answers too
+            enhancedAnswers[questionId].wrongAnswers = [
+              ...canvasQuestion.wrongAnswers,
+              ...enhancedQuestion.wrongAnswers
+            ]
+          }
         } else {
-          enhancedAnswers[questionId] = canvasQuestion
-          // Add knowledge bank wrong answers too
-          enhancedAnswers[questionId].wrongAnswers = [
-            ...canvasQuestion.wrongAnswers,
-            ...enhancedQuestion.wrongAnswers
-          ]
+          enhancedAnswers[questionId] = enhancedQuestion || canvasQuestion
         }
-      } else if (enhancedQuestion) {
-        enhancedAnswers[questionId] = enhancedQuestion
-      } else if (canvasQuestion) {
-        enhancedAnswers[questionId] = canvasQuestion
       } else {
-        // New question - will be saved to knowledge bank after submission
-        enhancedAnswers[questionId] = {
-          source: 'new',
-          isNew: true,
-          questionText: questionInfo.questionText,
-          questionType: questionInfo.questionType
+        // No known-correct answer: brand new OR only previous wrong attempts.
+        // AI is manual - offer an "Ask AI" button instead of calling Gemini now.
+        const knownWrongAnswers = [
+          ...(enhancedQuestion?.wrongAnswers || []),
+          ...(canvasQuestion?.wrongAnswers || [])
+        ]
+
+        if (this.aiMode) {
+          // AI is manual (right-click / button) and works in stealth too.
+          enhancedAnswers[questionId] = {
+            source: 'ai_pending',
+            aiPending: true,
+            questionText: questionInfo.questionText,
+            questionType: questionInfo.questionType,
+            options: questionInfo.options,
+            wrongAnswers: knownWrongAnswers
+          }
+        } else if (enhancedQuestion || canvasQuestion) {
+          // AI off - show previous (wrong) record
+          enhancedAnswers[questionId] = enhancedQuestion || canvasQuestion
+        } else {
+          // Brand new question - will be saved to knowledge bank after submission
+          enhancedAnswers[questionId] = {
+            source: 'new',
+            isNew: true,
+            questionText: questionInfo.questionText,
+            questionType: questionInfo.questionType
+          }
         }
       }
     }
 
     this.logger.info('Enhanced answers ready:', enhancedAnswers)
     return enhancedAnswers
+  }
+
+  /**
+   * Extract quiz/course context (title) from the DOM for AI prompts.
+   * Returns a short string, or empty string if nothing useful is found.
+   */
+  getQuizContext() {
+    const titleElement = document.querySelector('#quiz-title, .quiz-title, h1')
+    const quizTitle = titleElement?.textContent.trim()
+    const pageTitle = document.title?.trim()
+    return (quizTitle || pageTitle || '').replace(/\s+/g, ' ').trim()
   }
 
   /**
@@ -286,11 +464,13 @@ class EnhancedQuizLoader {
         ? questionTypeElements[questionIndex]?.innerText || 'unknown'
         : 'unknown'
 
-    // Extract options for multiple choice questions
+    // Extract options for choice-based questions (incl. multiple-answer, so the
+    // AI knows the exact options it must pick from)
     let options = null
     if (
       questionType === QuestionTypes.MULTIPLE_CHOICE ||
-      questionType === QuestionTypes.TRUE_FALSE
+      questionType === QuestionTypes.TRUE_FALSE ||
+      questionType === QuestionTypes.MULTIPLE_ANSWER
     ) {
       const optionElements = document.querySelectorAll(
         `#question_${questionId} .answer_label`
@@ -314,6 +494,7 @@ class EnhancedQuizLoader {
     const questionIds = this.getQuestionIds()
     const questionTypes = document.getElementsByClassName('question_type')
     const displayer = new EnhancedDisplayer(this.logger, this.stealthMode)
+    const quizContext = this.getQuizContext()
 
     // Store original point text if not already stored (to restore later in cleanup)
     for (let holder of pointHolders) {
@@ -333,14 +514,30 @@ class EnhancedQuizLoader {
         const question = questions[questionId]
 
         try {
-          // Add source badge (skip if stealth mode)
-          if (!this.stealthMode) {
+          // Add source badge (skip if stealth mode, and for ai_pending which uses a button)
+          if (!this.stealthMode && question.source !== 'ai_pending') {
             this.addSourceBadge(questionId, question.source)
           }
 
           // Skip display for new questions (just show badge)
           if (question.isNew) {
             this.logger.info(`New question ${questionId} - showing badge only`)
+            continue
+          }
+
+          // AI-answered question - match by option text, not Canvas answer id
+          if (question.source === 'ai') {
+            displayer.displayAIAnswer(question, questionId, questionType)
+            continue
+          }
+
+          // No known answer - flag any prior wrong answers and register for manual AI
+          // (right-click trigger, plus an "Ask AI" button when not in stealth).
+          if (question.aiPending) {
+            if (!this.stealthMode && question.wrongAnswers && question.wrongAnswers.length > 0) {
+              displayer.highlightAllWrongAnswers(question, questionId)
+            }
+            this.registerAIQuestion(questionId, question, questionType, displayer, quizContext)
             continue
           }
 
@@ -452,6 +649,11 @@ class EnhancedQuizLoader {
           badgeText = 'New Question'
           badgeColor = '#FF9800'
           break
+        case 'ai':
+          badgeIcon = '🤖'
+          badgeText = 'AI'
+          badgeColor = '#9C27B0'
+          break
         default:
           badgeIcon = '❓'
           badgeText = 'Unknown'
@@ -488,17 +690,218 @@ class EnhancedQuizLoader {
   }
 
   /**
+   * Register a question that has no known answer for manual AI.
+   * Trigger is a right-click (always) plus an "Ask AI" button when not in stealth.
+   * Gemini is only called on trigger, so requests are user-paced (avoids 503 bursts).
+   */
+  registerAIQuestion(questionId, question, questionType, displayer, quizContext) {
+    if (this.aiRegistry.has(questionId)) return
+
+    const entry = {
+      question,
+      questionType,
+      displayer,
+      quizContext,
+      button: null,
+      state: 'idle', // idle | asking | done | failed
+      requestId: null
+    }
+    this.aiRegistry.set(questionId, entry)
+
+    // Visible button only when not in stealth.
+    if (this.stealthMode) return
+
+    const questionElement = document.getElementById(
+      `question_${questionId}_question_text`
+    )
+    if (!questionElement || questionElement.querySelector('.ai-ask-button')) {
+      return
+    }
+
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'ai-ask-button answer-source-badge'
+    button.textContent = '🤖 Ask AI'
+    button.style.cssText = `
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                background: #9C27B0;
+                color: white;
+                border: none;
+                padding: 3px 10px;
+                border-radius: 12px;
+                font-size: 11px;
+                font-weight: bold;
+                margin-left: 8px;
+                vertical-align: middle;
+                cursor: pointer;
+            `
+    button.addEventListener('click', () => this.triggerAI(questionId))
+    questionElement.appendChild(button)
+    entry.button = button
+  }
+
+  /**
+   * Update an AI entry's button appearance (no-op in stealth where there is no button).
+   */
+  setAIButtonState(entry, text, color, disabled) {
+    if (!entry.button) return
+    entry.button.textContent = text
+    entry.button.style.background = color
+    entry.button.style.cursor = disabled ? 'wait' : 'pointer'
+    entry.button.disabled = disabled
+  }
+
+  /**
+   * Trigger the AI request for a question. In-flight -> ignored; failed -> retry.
+   * Starting a question aborts any other still-in-flight request.
+   */
+  async triggerAI(questionId) {
+    const entry = this.aiRegistry.get(questionId)
+    if (!entry) return
+
+    if (entry.state === 'asking') {
+      this.logger.info(`AI already running for ${questionId} - ignoring`)
+      return
+    }
+    if (entry.state === 'done') {
+      this.logger.info(`AI already answered ${questionId} - ignoring`)
+      return
+    }
+
+    // Moving to (asking) another question cancels any other in-flight request.
+    this.abortAllAIRequests(questionId)
+
+    const requestId = crypto.randomUUID()
+    entry.requestId = requestId
+    entry.state = 'asking'
+    this.setAIButtonState(entry, '🤖 Asking AI…', '#7B1FA2', true)
+
+    const questionInfo = {
+      questionText: entry.question.questionText,
+      questionType: entry.question.questionType,
+      options: entry.question.options
+    }
+
+    const result = await askGemini(
+      questionInfo,
+      entry.quizContext,
+      this.geminiApiKey,
+      this.logger,
+      requestId
+    )
+
+    // Discard if this request was superseded/aborted (entry reused or registry cleared).
+    if (entry.requestId !== requestId) return
+    if (result.status === 'aborted') {
+      entry.state = 'idle'
+      this.setAIButtonState(entry, '🤖 Ask AI', '#9C27B0', false)
+      return
+    }
+
+    if (result.status === 'ok') {
+      entry.state = 'done'
+      entry.requestId = null
+      const aiQuestion = {
+        source: 'ai',
+        bestAnswer: {
+          text: result.answer,
+          correct: Correct.TRUE,
+          points: 0,
+          dynamicFields: {}
+        },
+        wrongAnswers: entry.question.wrongAnswers || []
+      }
+      if (entry.button) {
+        entry.button.remove()
+        entry.button = null
+      }
+      entry.displayer.displayAIAnswer(aiQuestion, questionId, entry.questionType)
+      // Badge only when not in stealth (stealth uses the divider-fade tell).
+      if (!this.stealthMode) {
+        this.addSourceBadge(questionId, 'ai')
+      }
+
+      // Re-snapshot this question so the AI answer is captured for export
+      try {
+        const captureStart = performance.now()
+        await this.questionCompiler.captureQuestion(
+          questionId,
+          this.extractQuizIdFromURL(),
+          this.extractCourseIdFromURL()
+        )
+        this.logger.info(`📸 AI question re-capture: ${Math.round(performance.now() - captureStart)}ms`)
+      } catch (e) {
+        this.logger.warn(`Failed to re-capture AI question ${questionId}:`, e)
+      }
+    } else {
+      // Failed - allow retry (button turns red; right-click re-triggers in stealth).
+      entry.state = 'failed'
+      entry.requestId = null
+      this.setAIButtonState(entry, '🔄 Retry AI', '#D32F2F', false)
+    }
+  }
+
+  /**
+   * Abort all in-flight AI requests, optionally skipping one questionId.
+   */
+  abortAllAIRequests(exceptQuestionId = null) {
+    for (const [id, entry] of this.aiRegistry) {
+      if (id === exceptQuestionId) continue
+      if (entry.state === 'asking' && entry.requestId) {
+        abortGeminiRequest(entry.requestId)
+        entry.requestId = null
+        entry.state = 'idle'
+        this.setAIButtonState(entry, '🤖 Ask AI', '#9C27B0', false)
+      }
+    }
+  }
+
+  /**
+   * Right-click handler: trigger/retry a question's AI answer.
+   * One question per page -> right-click anywhere triggers the single pending one.
+   * Multiple on page -> must right-click on the target question. If the click
+   * isn't on a pending AI question, do nothing and let the native menu show.
+   */
+  handleRightClick(event) {
+    // One question per page: right-click anywhere suppresses the native menu.
+    // Triggers AI if pending; otherwise silently ignored (answered/fetching).
+    if (this.getQuestionIds().length <= 1) {
+      event.preventDefault()
+      const onlyId = [...this.aiRegistry.keys()][0]
+      if (onlyId) this.triggerAI(onlyId)
+      return
+    }
+
+    // Multiple questions on page: only over a question element. Right-clicking a
+    // question suppresses its menu whether or not AI is needed; acts only if pending.
+    const container = event.target?.closest?.('.display_question, .question')
+    if (!container) return // not on a question - let the native menu show
+
+    event.preventDefault()
+    const questionId = container.id?.replace('question_', '')
+    if (questionId && this.aiRegistry.has(questionId)) {
+      this.triggerAI(questionId)
+    }
+  }
+
+  /**
    * Cleanup badges and highlights from the DOM
    */
   cleanupDOM() {
     this.logger.info('🧹 Cleaning up DOM badges and highlights...')
+
+    // Abort any in-flight AI requests and clear the registry before a re-render
+    this.abortAllAIRequests()
+    this.aiRegistry.clear()
 
     // Remove source badges
     document.querySelectorAll('.answer-source-badge').forEach(el => el.remove())
 
     // Remove correct/wrong answer badges
     document
-      .querySelectorAll('.correct-answer-badge, .wrong-answer-badge')
+      .querySelectorAll('.correct-answer-badge, .wrong-answer-badge, .ai-answer-badge')
       .forEach(el => el.remove())
 
     // Remove source highlights from point holders
@@ -522,18 +925,13 @@ class EnhancedQuizLoader {
       }
     }
 
-    // Remove stealth italics (if any)
-    document.querySelectorAll('i').forEach(i => {
-      const span = i.closest('span')
-      if (
-        span &&
-        span.parentNode &&
-        span.innerHTML.includes('<i>') &&
-        span.childNodes.length <= 3
-      ) {
-        const textContent = span.textContent
-        const textNode = document.createTextNode(textContent)
-        span.parentNode.replaceChild(textNode, span)
+    // Remove stealth divider fades (restore Canvas's default answer border)
+    document.querySelectorAll('.stealth-fade-cover').forEach(el => el.remove())
+    document.querySelectorAll('.answer').forEach(answer => {
+      if (answer.style.borderImage) {
+        answer.style.borderImage = ''
+        answer.style.borderTopStyle = ''
+        answer.style.position = ''
       }
     })
 
@@ -1455,7 +1853,7 @@ class EnhancedDisplayer {
       // Show badge for correct or wrong answer, no auto-selection
       if (bestAnswer.correct === Correct.TRUE) {
         if (this.stealthMode) {
-          this.applyStealthItalics(el)
+          this.applyStealthDividerFade(el)
         } else {
           this.highlightCorrectAnswerWithBadge(el)
         }
@@ -1481,6 +1879,118 @@ class EnhancedDisplayer {
     // Highlight all wrong answers from knowledge bank
     if (!this.stealthMode) {
       this.highlightAllWrongAnswers(question, questionId)
+    }
+  }
+
+  /**
+   * Display a Gemini AI answer. Matches by option text (AI has no Canvas answer ids).
+   */
+  displayAIAnswer(question, questionId, questionType) {
+    const answerText = question.bestAnswer?.text
+    if (!answerText) return
+
+    const normalize = text => text.toLowerCase().replace(/\s+/g, ' ').trim()
+    const matches = (a, b) => {
+      const left = normalize(a)
+      const right = normalize(b)
+      return left.includes(right) || right.includes(left)
+    }
+
+    switch (questionType) {
+      case QuestionTypes.MULTIPLE_CHOICE:
+      case QuestionTypes.TRUE_FALSE: {
+        const labels = document.querySelectorAll(`#question_${questionId} .answer_label`)
+        for (const label of labels) {
+          if (matches(label.textContent, answerText)) {
+            // Stealth: fade the divider above the choice; otherwise show the AI badge.
+            if (this.stealthMode) {
+              this.applyStealthDividerFade(label)
+            } else {
+              this.highlightAIAnswerWithBadge(label)
+            }
+          }
+        }
+        // Also flag any previously-wrong answers carried from history (skip in stealth)
+        if (!this.stealthMode) {
+          this.highlightAllWrongAnswers(question, questionId)
+        }
+        break
+      }
+
+      case QuestionTypes.MULTIPLE_ANSWER: {
+        const aiAnswers = answerText.split(/\s*\|\s*|,/).map(a => a.trim()).filter(Boolean)
+        const labels = document.querySelectorAll(`#question_${questionId} .answer_label`)
+        for (const label of labels) {
+          if (aiAnswers.some(aiAnswer => matches(label.textContent, aiAnswer))) {
+            if (this.stealthMode) {
+              this.applyStealthDividerFade(label)
+            } else {
+              this.highlightAIAnswerWithBadge(label)
+            }
+          }
+        }
+        if (!this.stealthMode) {
+          this.highlightAllWrongAnswers(question, questionId)
+        }
+        break
+      }
+
+      case QuestionTypes.ESSAY_QUESTION: {
+        // Essay has no divider tell - stealth shows nothing.
+        if (this.stealthMode) break
+        const textarea = document.querySelector(`textarea[name="question_${questionId}"]`)
+        if (textarea) {
+          textarea.placeholder = `AI suggestion: ${answerText.substring(0, 200)}`
+          textarea.style.borderColor = '#9C27B0'
+          this.highlightAIAnswerWithBadge(textarea, '🤖 AI suggestion')
+        }
+        break
+      }
+
+      default: {
+        // Fill-in/numerical have no divider tell - stealth shows nothing.
+        if (this.stealthMode) break
+        const input = document.querySelector(`input[name="question_${questionId}"]`)
+        if (input) {
+          input.placeholder = `AI answer: ${answerText}`
+          input.style.borderColor = '#9C27B0'
+          this.highlightAIAnswerWithBadge(input, `🤖 ${answerText}`)
+        }
+      }
+    }
+  }
+
+  highlightAIAnswerWithBadge(element, customMessage = null) {
+    const badge = document.createElement('span')
+    badge.className = 'ai-answer-badge'
+
+    const iconSpan = document.createElement('span')
+    iconSpan.className = 'badge-icon'
+    iconSpan.textContent = '🤖'
+
+    const textSpan = document.createElement('span')
+    textSpan.className = 'badge-text'
+    textSpan.textContent = customMessage || 'AI'
+
+    badge.appendChild(iconSpan)
+    badge.appendChild(textSpan)
+    badge.style.cssText = `
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: #9C27B0;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 8px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-left: 6px;
+            opacity: 0.9;
+        `
+
+    const label = element.closest('label') || element.parentElement
+    if (label && !label.querySelector('.ai-answer-badge')) {
+      label.appendChild(badge)
     }
   }
 
@@ -1537,7 +2047,7 @@ class EnhancedDisplayer {
           const labelText = label.textContent.trim()
           if (answers.some(answer => labelText.includes(answer))) {
             if (this.stealthMode) {
-              this.applyStealthItalics(checkbox)
+              this.applyStealthDividerFade(checkbox)
             } else {
               this.highlightCorrectAnswerWithBadge(checkbox)
             }
@@ -1753,51 +2263,93 @@ class EnhancedDisplayer {
   }
 
   /**
-   * Stealth Mode: Randomly choose one character in correct choice and italicize it.
+   * Stealth Mode (OLD): Randomly choose one character in correct choice and italicize it.
+   * Disabled — italic changes glyph width, causing a visible flicker on render.
+   * Replaced by applyStealthDividerFade below.
    */
-  applyStealthItalics(element) {
-    const label = element.closest('label') || element.parentElement
-    if (!label) return
+  // applyStealthItalics(element) {
+  //   const label = element.closest('label') || element.parentElement
+  //   if (!label) return
+  //
+  //   // Find the text node(s) within the label
+  //   const findTextNodes = (node) => {
+  //     let textNodes = []
+  //     for (let child of node.childNodes) {
+  //       if (child.nodeType === Node.TEXT_NODE && child.textContent.trim().length > 0) {
+  //         textNodes.push(child)
+  //       } else if (child.nodeType === Node.ELEMENT_NODE && child.tagName !== 'INPUT' && child.tagName !== 'I') {
+  //         textNodes = textNodes.concat(findTextNodes(child))
+  //       }
+  //     }
+  //     return textNodes
+  //   }
+  //
+  //   const textNodes = findTextNodes(label)
+  //   if (textNodes.length === 0) return
+  //
+  //   // Choose a random text node and a random character within it
+  //   const randomNodeIndex = Math.floor(Math.random() * textNodes.length)
+  //   const targetNode = textNodes[randomNodeIndex]
+  //   const text = targetNode.textContent
+  //
+  //   // Find index of first non-whitespace character to avoid italicizing spaces if possible
+  //   const trimmedText = text.trim()
+  //   const firstCharIndex = text.indexOf(trimmedText[0])
+  //   const lastCharIndex = text.lastIndexOf(trimmedText[trimmedText.length - 1])
+  //
+  //   if (lastCharIndex < firstCharIndex) return // Should not happen with trim check
+  //
+  //   const randomCharIndex = firstCharIndex + Math.floor(Math.random() * (lastCharIndex - firstCharIndex + 1))
+  //
+  //   // Split text and inject <i> tag
+  //   const before = text.substring(0, randomCharIndex)
+  //   const char = text.substring(randomCharIndex, randomCharIndex + 1)
+  //   const after = text.substring(randomCharIndex + 1)
+  //
+  //   const span = document.createElement('span')
+  //   span.innerHTML = `${before}<i>${char}</i>${after}`
+  //
+  //   targetNode.parentNode.replaceChild(span, targetNode)
+  // }
 
-    // Find the text node(s) within the label
-    const findTextNodes = (node) => {
-      let textNodes = []
-      for (let child of node.childNodes) {
-        if (child.nodeType === Node.TEXT_NODE && child.textContent.trim().length > 0) {
-          textNodes.push(child)
-        } else if (child.nodeType === Node.ELEMENT_NODE && child.tagName !== 'INPUT' && child.tagName !== 'I') {
-          textNodes = textNodes.concat(findTextNodes(child))
-        }
-      }
-      return textNodes
+  /**
+   * Stealth Mode: Fade the divider directly above the correct choice.
+   * The divider is the `border-top: 1px #ddd` on each `.answer` row, so the
+   * top border above the correct choice is faded left-to-transparent.
+   * Paint-only (border-image): same 1px width, no layout shift, no flicker.
+   * A knower scans for the divider that thins out on its left side.
+   */
+  applyStealthDividerFade(element) {
+    const answer = element.closest('.answer')
+    if (!answer) return
+
+    // Apply the faded gap immediately (left 10px -> transparent).
+    answer.style.borderTopStyle = 'solid'
+    answer.style.borderImage =
+      'linear-gradient(to right, transparent 0px, rgb(221, 221, 221) 10px) 1'
+
+    // border-image can't be CSS-transitioned, so animate the reveal: lay a tiny
+    // #ddd cover over the gap (line looks full), then fade the cover out so the
+    // gap appears gradually instead of flicking in.
+    if (getComputedStyle(answer).position === 'static') {
+      answer.style.position = 'relative'
     }
-
-    const textNodes = findTextNodes(label)
-    if (textNodes.length === 0) return
-
-    // Choose a random text node and a random character within it
-    const randomNodeIndex = Math.floor(Math.random() * textNodes.length)
-    const targetNode = textNodes[randomNodeIndex]
-    const text = targetNode.textContent
-
-    // Find index of first non-whitespace character to avoid italicizing spaces if possible
-    const trimmedText = text.trim()
-    const firstCharIndex = text.indexOf(trimmedText[0])
-    const lastCharIndex = text.lastIndexOf(trimmedText[trimmedText.length - 1])
-
-    if (lastCharIndex < firstCharIndex) return // Should not happen with trim check
-
-    const randomCharIndex = firstCharIndex + Math.floor(Math.random() * (lastCharIndex - firstCharIndex + 1))
-
-    // Split text and inject <i> tag
-    const before = text.substring(0, randomCharIndex)
-    const char = text.substring(randomCharIndex, randomCharIndex + 1)
-    const after = text.substring(randomCharIndex + 1)
-
-    const span = document.createElement('span')
-    span.innerHTML = `${before}<i>${char}</i>${after}`
-
-    targetNode.parentNode.replaceChild(span, targetNode)
+    const cover = document.createElement('div')
+    cover.className = 'stealth-fade-cover'
+    cover.style.cssText = `
+      position: absolute;
+      top: -1px;
+      left: 0;
+      width: 10px;
+      height: 1px;
+      background: rgb(221, 221, 221);
+      opacity: 1;
+      transition: opacity 0.6s ease;
+      pointer-events: none;
+    `
+    answer.appendChild(cover)
+    requestAnimationFrame(() => { cover.style.opacity = '0' })
+    setTimeout(() => cover.remove(), 700)
   }
 
   /**
@@ -1814,6 +2366,8 @@ class EnhancedDisplayer {
 
 async function enhancedMain() {
   const loader = new EnhancedQuizLoader()
+  currentLoader = loader // expose for global right-click/unload handlers
+  attachAIGlobalListeners()
 
   // Wait for BYUI if needed
   if (isByui()) await wait(2)
@@ -2097,6 +2651,19 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     logger.info(`Stealth mode toggled to ${message.enabled ? 'ON' : 'OFF'} - re-running...`)
 
     // Re-run the main function to apply/remove badges
+    enhancedMain().catch(error => {
+      logger.error('QuizBank re-run failed:', error)
+    })
+
+    sendResponse({ success: true })
+    return true
+  }
+
+  if (message.type === `${prefix}-set-ai`) {
+    const logger = BrowserLogger.getInstance()
+    logger.info(`AI mode toggled to ${message.enabled ? 'ON' : 'OFF'} - re-running...`)
+
+    // Re-run the main function to apply/remove AI answers
     enhancedMain().catch(error => {
       logger.error('QuizBank re-run failed:', error)
     })

@@ -31,6 +31,20 @@
           <span class="toggle-text">Stealth Mode</span>
         </label>
       </div>
+      <div class="toggle-option">
+        <label class="toggle-label">
+          <input type="checkbox" id="ai-toggle">
+          <span class="toggle-slider"></span>
+          <span class="toggle-text">AI if new</span>
+        </label>
+      </div>
+      <div class="toggle-option">
+        <label class="toggle-label">
+          <input type="checkbox" id="clipboard-toggle">
+          <span class="toggle-slider"></span>
+          <span class="toggle-text">ClipboardAuto</span>
+        </label>
+      </div>
     </div>
   </div>
 
@@ -43,7 +57,7 @@
     <p class="access-description">Enter your access code to activate QuizBank</p>
 
     <div class="voucher-form">
-      <input type="text" id="voucher-input" placeholder="Enter access code" maxlength="20" autocomplete="off"
+      <input type="text" id="voucher-input" placeholder="Enter access code" autocomplete="off"
         spellcheck="false">
       <button id="activate-btn" class="activate-btn">
         <span class="btn-text">Activate</span>
@@ -88,7 +102,7 @@
     </a>
 
     <!-- ClipboardAuto Section -->
-    <div class="clipboard-auto-section">
+    <div class="clipboard-auto-section" id="clipboard-auto-section">
       <button class="clipboard-auto-btn" id="clipboard-auto-btn">
         <span class="clipboard-auto-icon">📋</span>
         <span class="clipboard-auto-text">ClipboardAuto</span>
