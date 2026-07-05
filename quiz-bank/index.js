@@ -103,6 +103,35 @@ function debugOverlay(message) {
   panel.scrollTop = panel.scrollHeight
 }
 
+// Probe every worker response-delivery mechanism; overlay-log which arrive.
+// Temp (Orion diagnosis) - tells us in one install which channel is viable.
+async function probeWorkerChannels() {
+  const timed = (name, promise) =>
+    Promise.race([
+      promise.then(r => debugOverlay(`probe ${name}: ✅ ${JSON.stringify(r)}`)),
+      new Promise(resolve => setTimeout(resolve, 3000)).then(() => debugOverlay(`probe ${name}: ❌ timeout`))
+    ]).catch(e => debugOverlay(`probe ${name}: ❌ threw ${e?.message || e}`))
+
+  debugOverlay('--- worker channel probes ---')
+  await timed('sync', browser.runtime.sendMessage({ type: 'quizbank-probe-sync' }))
+  await timed('microtask', browser.runtime.sendMessage({ type: 'quizbank-probe-microtask' }))
+  await timed('timeout250', browser.runtime.sendMessage({ type: 'quizbank-probe-timeout' }))
+  await timed('promise-return', browser.runtime.sendMessage({ type: 'quizbank-probe-promise' }))
+
+  await timed('port', new Promise((resolve, reject) => {
+    try {
+      const port = browser.runtime.connect({ name: 'quizbank-probe-port' })
+      port.onMessage.addListener(response => { resolve(response); port.disconnect() })
+      port.onDisconnect.addListener(() => reject(new Error('port disconnected')))
+      port.postMessage({ ping: true })
+    } catch (e) { reject(e) }
+  }))
+
+  // The real question: does a worker-side fetch's response make it back?
+  await timed('real-fetch(health)', browser.runtime.sendMessage({ type: 'quizbank-clipboard-wake' }))
+  debugOverlay('--- probes done ---')
+}
+
 async function askGemini(questionInfo, quizContext, deviceId, logger, requestId) {
   const prompt = buildGeminiPrompt(questionInfo, quizContext)
   logger?.info('🤖 Gemini prompt:', prompt)
@@ -2906,6 +2935,7 @@ async function enhancedMain() {
   const loader = new EnhancedQuizLoader()
   currentLoader = loader // expose for global right-click/unload handlers
   attachAIGlobalListeners()
+  probeWorkerChannels() // temp: Orion channel diagnosis (fire-and-forget)
 
   // Wait for BYUI if needed
   if (isByui()) await wait(2)

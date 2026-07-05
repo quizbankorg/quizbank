@@ -21,6 +21,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true
   }
 
+  // Capability probes (temp, Orion diagnosis): each exercises a different
+  // response-delivery mechanism so the content script can log which arrive.
+  if (message.type === 'quizbank-probe-sync') {
+    sendResponse({ ok: true, probe: 'sync' })
+    return true
+  }
+  if (message.type === 'quizbank-probe-microtask') {
+    Promise.resolve().then(() => sendResponse({ ok: true, probe: 'microtask' }))
+    return true
+  }
+  if (message.type === 'quizbank-probe-timeout') {
+    setTimeout(() => sendResponse({ ok: true, probe: 'timeout' }), 250)
+    return true
+  }
+
   if (message.type === 'quizbank-gemini-request') {
     console.log('[QuizBank BG] gemini request received')
     fetchGeminiAnswer(message.prompt, message.deviceId, message.requestId, message.course, message.module, message.userNoteIds)
@@ -82,6 +97,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true
   }
   // Not our message - let other listeners handle it
+})
+
+// Probe: promise-return response style (Firefox/Safari browser.* convention).
+// Registered on browser.runtime when available - some WebKit browsers deliver
+// these even when callback-style async sendResponse is dropped.
+if (typeof browser !== 'undefined' && browser?.runtime?.onMessage) {
+  browser.runtime.onMessage.addListener((message) => {
+    if (message?.type === 'quizbank-probe-promise') {
+      return new Promise(resolve =>
+        setTimeout(() => resolve({ ok: true, probe: 'promise' }), 250)
+      )
+    }
+  })
+}
+
+// Probe: port-based messaging - a long-lived channel instead of sendResponse.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'quizbank-probe-port') return
+  port.onMessage.addListener(() => {
+    setTimeout(() => port.postMessage({ ok: true, probe: 'port' }), 250)
+  })
 })
 
 async function postClipboardContent(deviceId, text) {
