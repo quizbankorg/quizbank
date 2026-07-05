@@ -37,8 +37,9 @@ const Correct = {
 }
 
 // ==================== GEMINI AI ====================
-// The actual Gemini fetch runs in the background service worker (quiz-bank/background.js).
-// API key is fetched from Supabase (app_config table, key "gemini_api_key").
+// The background service worker (quiz-bank/background.js) relays the prompt to the
+// backend (render-server), which holds the Gemini API key and validates voucher
+// access. The extension never handles the key.
 
 /**
  * Build a type-aware prompt for Gemini from a question.
@@ -82,23 +83,20 @@ function buildGeminiPrompt(questionInfo, quizContext) {
  * Ask Gemini for an answer. Returns { status, answer } where status is
  * 'ok' | 'failed' | 'aborted'. requestId lets the caller abort the in-flight fetch.
  */
-async function askGemini(questionInfo, quizContext, apiKey, logger, requestId) {
-  if (!apiKey) {
-    logger?.warn('No Gemini API key available - skipping AI answer')
-    return { status: 'failed' }
-  }
-
+async function askGemini(questionInfo, quizContext, deviceId, logger, requestId) {
   const prompt = buildGeminiPrompt(questionInfo, quizContext)
   logger?.info('🤖 Gemini prompt:', prompt)
 
   try {
     // Run the request in the background service worker - isolated from the page's
     // network contention (ClipboardAuto polling etc.) which was stalling it badly.
+    // The worker relays the prompt to the backend, which holds the Gemini key
+    // and validates the device's voucher before answering.
     const startTime = performance.now()
     const result = await browser.runtime.sendMessage({
       type: 'quizbank-gemini-request',
       prompt,
-      apiKey,
+      deviceId,
       requestId
     })
     logger?.info(`🤖 Gemini network time: ${Math.round(performance.now() - startTime)}ms`)
@@ -165,7 +163,6 @@ class EnhancedQuizLoader {
     this.initialized = false
     this.stealthMode = false // Default to disabled
     this.aiMode = true // Default to enabled
-    this.geminiApiKey = null
     // Pending/in-flight AI questions keyed by questionId.
     // Entry: { question, questionType, displayer, quizContext, button, state, requestId }
     this.aiRegistry = new Map()
@@ -199,17 +196,8 @@ class EnhancedQuizLoader {
         this.logger.warn('Failed to load AI mode preference')
       }
 
-      // Load Gemini API key from Supabase backend (only needed when AI is on)
-      if (this.aiMode) {
-        try {
-          this.geminiApiKey = await this.dbManager.getConfigValue('gemini_api_key')
-          if (!this.geminiApiKey) {
-            this.logger.warn('Gemini API key not configured in backend')
-          }
-        } catch (e) {
-          this.logger.warn('Failed to load Gemini API key')
-        }
-      }
+      // Gemini calls now go through the backend, which holds the API key and
+      // validates voucher access - the content script never handles the key.
 
       this.initialized = true
       this.logger.info('QuizBank initialized with knowledge bank')
@@ -784,10 +772,11 @@ class EnhancedQuizLoader {
       options: entry.question.options
     }
 
+    const deviceId = await this.dbManager.getDeviceId()
     const result = await askGemini(
       questionInfo,
       entry.quizContext,
-      this.geminiApiKey,
+      deviceId,
       this.logger,
       requestId
     )
@@ -2027,47 +2016,23 @@ class EnhancedDisplayer {
     const bestAnswer = question.bestAnswer
     if (!bestAnswer) return
 
-    // Parse multiple answers
-    let answers = []
-    if (bestAnswer.dynamicFields) {
-      answers = Object.values(bestAnswer.dynamicFields)
-    } else if (bestAnswer.text) {
-      answers = bestAnswer.text.split(',').map(a => a.trim())
-    }
+    const isCorrect = bestAnswer.correct === Correct.TRUE
+    // Stealth only ever marks correct answers (never wrong).
+    if (this.stealthMode && !isCorrect) return
 
-    // Show badges for correct answers, no auto-selection
-    if (bestAnswer.correct === Correct.TRUE && answers.length > 0) {
-      const checkboxes = document.querySelectorAll(
-        `input[name^="question_${questionId}"]`
-      )
+    // Resolve the selected option inputs.
+    const selectedInputs = this.resolveMultipleAnswerInputs(bestAnswer, questionId)
+    this.logger.info(`Multiple-answer ${questionId}: matched ${selectedInputs.length} option(s)`)
 
-      for (const checkbox of checkboxes) {
-        const label = document.querySelector(`label[for="${checkbox.id}"]`)
-        if (label) {
-          const labelText = label.textContent.trim()
-          if (answers.some(answer => labelText.includes(answer))) {
-            if (this.stealthMode) {
-              this.applyStealthDividerFade(checkbox)
-            } else {
-              this.highlightCorrectAnswerWithBadge(checkbox)
-            }
-          }
+    for (const input of selectedInputs) {
+      if (isCorrect) {
+        if (this.stealthMode) {
+          this.applyStealthDividerFade(input)
+        } else {
+          this.highlightCorrectAnswerWithBadge(input)
         }
-      }
-    } else if (!this.stealthMode && bestAnswer.correct === Correct.FALSE && answers.length > 0) {
-      // Highlight wrong answers (skip if stealth)
-      const checkboxes = document.querySelectorAll(
-        `input[name^="question_${questionId}"]`
-      )
-
-      for (const checkbox of checkboxes) {
-        const label = document.querySelector(`label[for="${checkbox.id}"]`)
-        if (label) {
-          const labelText = label.textContent.trim()
-          if (answers.some(answer => labelText.includes(answer))) {
-            this.highlightWrongAnswerWithBadge(checkbox)
-          }
-        }
+      } else if (!this.stealthMode) {
+        this.highlightWrongAnswerWithBadge(input)
       }
     }
 
@@ -2075,6 +2040,46 @@ class EnhancedDisplayer {
     if (!this.stealthMode) {
       this.highlightAllWrongAnswers(question, questionId)
     }
+  }
+
+  /**
+   * Resolve which option <input>s a multiple-answer record refers to.
+   * Canvas stores dynamicFields as { answer_<id>: "1" | "0" } (selection flags),
+   * so the selected options are the keys whose value is truthy. Knowledge-bank
+   * records may instead store a comma-separated text list, matched by label text.
+   */
+  resolveMultipleAnswerInputs(bestAnswer, questionId) {
+    const inputs = []
+    const dynamicFields = bestAnswer.dynamicFields
+
+    if (dynamicFields && Object.keys(dynamicFields).length > 0) {
+      const selectedIds = Object.entries(dynamicFields)
+        .filter(([, value]) => value === '1' || value === 1 || value === true)
+        .map(([key]) => key.replace(/^answer_/, ''))
+
+      for (const answerId of selectedIds) {
+        const input = document.querySelector(
+          `#question_${questionId} input[value="${answerId}"]`
+        )
+        if (input) inputs.push(input)
+      }
+      if (inputs.length > 0) return inputs
+    }
+
+    // Fallback: match by option label text (e.g. comma-separated text records)
+    if (bestAnswer.text) {
+      const answers = bestAnswer.text.split(',').map(a => a.trim()).filter(Boolean)
+      const labels = document.querySelectorAll(`#question_${questionId} .answer_label`)
+      for (const label of labels) {
+        const labelText = label.textContent.trim()
+        if (answers.some(answer => labelText.includes(answer) || answer.includes(labelText))) {
+          const input = label.closest('.answer')?.querySelector('input')
+          if (input) inputs.push(input)
+        }
+      }
+    }
+
+    return inputs
   }
 
   displayEssay(question, questionId, autoFill = false) {

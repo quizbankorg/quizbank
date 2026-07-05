@@ -76,6 +76,10 @@ class QuestionCompiler {
         questionName.textContent = questionName.textContent.replace(/Question\s+\d+/i, 'Question')
       }
 
+      // Strip any executable content before this markup is stored and later
+      // rendered on other users' machines (prevents stored XSS across the bank).
+      this.sanitizeElement(clone)
+
       // Get the HTML string
       let questionHTML = clone.outerHTML
 
@@ -343,7 +347,7 @@ class QuestionCompiler {
       let newCount = 0
 
       Object.entries(filteredQuestions).forEach(([qId, data]) => {
-        questionsHTML += data.html + '\n\n'
+        questionsHTML += this.sanitizeHTMLString(data.html) + '\n\n'
         if (data.hasCorrect) correctCount++
         else if (data.hasWrong) wrongCount++
         else newCount++
@@ -384,6 +388,61 @@ class QuestionCompiler {
     const div = document.createElement('div')
     div.textContent = str
     return div.innerHTML
+  }
+
+  /**
+   * Strip active/executable content from a DOM element in place.
+   *
+   * Compiled question HTML is captured from the quiz DOM, stored in Supabase, and
+   * later rendered/exported on *other* users' machines. Without this, a poisoned
+   * capture (script tag, inline event handler, javascript: URL) becomes stored XSS
+   * against everyone who exports the shared bank. We keep layout/markup but remove
+   * anything that can execute.
+   */
+  sanitizeElement(element) {
+    if (!element || !element.querySelectorAll) return element
+
+    // Remove tags that can execute or load active content.
+    const dangerousTags = 'script, iframe, object, embed, link, meta, base, form'
+    element.querySelectorAll(dangerousTags).forEach(node => node.remove())
+
+    // Strip event-handler attributes and javascript: URLs from every element.
+    const walk = (node) => {
+      if (node.attributes) {
+        for (const attr of Array.from(node.attributes)) {
+          const name = attr.name.toLowerCase()
+          const value = (attr.value || '').replace(/\s+/g, '').toLowerCase()
+          if (name.startsWith('on')) {
+            node.removeAttribute(attr.name)
+          } else if ((name === 'href' || name === 'src' || name === 'xlink:href') && value.startsWith('javascript:')) {
+            node.removeAttribute(attr.name)
+          } else if (name === 'srcdoc') {
+            node.removeAttribute(attr.name)
+          }
+        }
+      }
+      node.childNodes && node.childNodes.forEach(walk)
+    }
+    walk(element)
+
+    return element
+  }
+
+  /**
+   * Sanitize an HTML string (used for content already stored in the database).
+   * Parses in a detached document so nothing executes, strips active content,
+   * and returns the cleaned markup.
+   */
+  sanitizeHTMLString(html) {
+    if (!html) return ''
+    try {
+      const doc = new DOMParser().parseFromString(html, 'text/html')
+      this.sanitizeElement(doc.body)
+      return doc.body.innerHTML
+    } catch (error) {
+      this.logger.warn('Failed to sanitize stored HTML, escaping instead:', error?.message)
+      return this.escapeHTML(html)
+    }
   }
 
   /**
@@ -600,7 +659,7 @@ class QuestionCompiler {
       `
 
       Object.entries(quizData.questions).forEach(([qId, data]) => {
-        questionsHTML += data.html + '\n\n'
+        questionsHTML += this.sanitizeHTMLString(data.html) + '\n\n'
         if (data.hasCorrect) correctCount++
         else if (data.hasWrong) wrongCount++
         else newCount++
@@ -647,7 +706,7 @@ class QuestionCompiler {
         `
 
         Object.entries(quizData.questions).forEach(([qId, data]) => {
-          questionsHTML += data.html + '\n\n'
+          questionsHTML += this.sanitizeHTMLString(data.html) + '\n\n'
           if (data.hasCorrect) correctCount++
           else if (data.hasWrong) wrongCount++
           else newCount++

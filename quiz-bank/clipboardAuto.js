@@ -6,7 +6,7 @@
  */
 
 const ClipboardAuto = {
-    API_URL: 'https://api-htmd.onrender.com',
+    API_URL: 'https://quizbankend-production.up.railway.app',
     POLL_INTERVAL: 2000, // 2 seconds
     pollTimer: null,
     deviceId: null,

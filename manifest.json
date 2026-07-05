@@ -1,6 +1,6 @@
 {
   "update_url": "https://clients2.google.com/service/update2/crx",
-  "manifest_version": 4,
+  "manifest_version": 3,
   "name": "QuizBank",
   "short_name": "QuizBank",
   "version": "2.2.0",
@@ -55,8 +55,7 @@
   ],
   "host_permissions": [
     "https://*.supabase.co/*",
-    "https://api-htmd.onrender.com/*",
-    "https://generativelanguage.googleapis.com/*"
+    "https://quizbankend-production.up.railway.app/*"
   ],
   "browser_specific_settings": {
     "gecko": {
