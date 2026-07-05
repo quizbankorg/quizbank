@@ -176,12 +176,11 @@ const ClipboardAuto = {
         const deviceId = await this.getDeviceId();
 
         try {
-            // Run the request in the background service worker so it doesn't compete
-            // with the quiz page's network (the Render server can be slow to wake).
-            await browser.runtime.sendMessage({
-                type: 'quizbank-clipboard-post',
-                deviceId: deviceId,
-                text: text
+            // Direct fetch (quizBankApiRequest is defined in index.js, loaded first).
+            await quizBankApiRequest(`/api/${deviceId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text })
             });
             this.getLogger().info('📤 ClipboardAuto: Content sent to API');
         } catch (error) {
@@ -206,8 +205,7 @@ const ClipboardAuto = {
      * Useful for Render.com free tier servers that go to sleep after inactivity
      */
     wakeUpServer() {
-        // Run in the background service worker (off the page's network).
-        browser.runtime.sendMessage({ type: 'quizbank-clipboard-wake' })
+        quizBankApiRequest('/health')
             .then(() => {
                 this.getLogger().info('☕ ClipboardAuto: Server wake-up ping sent');
             })

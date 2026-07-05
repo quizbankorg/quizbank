@@ -158,6 +158,25 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
 // Backend that relays prompts to Gemini.
 const QUIZBANK_API_URL = 'https://quizbankend-production.up.railway.app'
 
+/**
+ * Call the backend from the content script and parse the JSON body.
+ * All extension requests go direct - the old background-worker relay hung
+ * forever on Orion iOS, which never delivers responses from a suspended worker.
+ * Returns the parsed body, or { ok: false, error } on network/parse failure.
+ */
+async function quizBankApiRequest(path, options = {}) {
+  try {
+    const response = await fetch(`${QUIZBANK_API_URL}${path}`, options)
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok && data.ok === undefined) {
+      return { ok: false, status: response.status, error: data.error }
+    }
+    return data
+  } catch (error) {
+    return { ok: false, error: String(error) }
+  }
+}
+
 // AbortControllers for in-flight Gemini fetches, keyed by requestId.
 const directGeminiControllers = new Map()
 
@@ -1646,10 +1665,7 @@ class EnhancedQuizLoader {
 
       try {
         const deviceId = await this.dbManager.getDeviceId()
-        const response = await browser.runtime.sendMessage({
-          type: 'quizbank-get-materials',
-          deviceId
-        })
+        const response = await quizBankApiRequest(`/api/materials?deviceId=${encodeURIComponent(deviceId)}`)
         catalog = (response && response.ok && Array.isArray(response.courses)) ? response.courses : []
       } catch (e) {
         this.logger.error('Error fetching materials catalog:', e)
@@ -1775,10 +1791,7 @@ class EnhancedQuizLoader {
           
           uploadsList.innerHTML = '<div style="font-size: 10px; color: #94a3b8; font-style: italic; text-align: center; padding: 6px 0;">Loading notes...</div>'
 
-          const response = await browser.runtime.sendMessage({
-            type: 'quizbank-get-user-notes',
-            deviceId
-          })
+          const response = await quizBankApiRequest(`/api/user-notes?deviceId=${encodeURIComponent(deviceId)}`)
 
           const files = (response && response.ok && Array.isArray(response.notes)) ? response.notes : []
           await browser.storage.local.set({ quizbank_user_notes: files })
@@ -1818,11 +1831,10 @@ class EnhancedQuizLoader {
               const id = Number(btn.getAttribute('data-id'))
               btn.innerHTML = '⏳'
               
-              const delResponse = await browser.runtime.sendMessage({
-                type: 'quizbank-delete-user-note',
-                deviceId,
-                id
-              })
+              const delResponse = await quizBankApiRequest(
+                `/api/user-notes/${id}?deviceId=${encodeURIComponent(deviceId)}`,
+                { method: 'DELETE' }
+              )
 
               if (delResponse && delResponse.ok) {
                 const storedDelete = await browser.storage.local.get(['quizbank_selected_user_files'])
@@ -1853,29 +1865,17 @@ class EnhancedQuizLoader {
             const existingSelected = storedUpload.quizbank_selected_user_files || []
 
             for (const file of files) {
-              const base64Data = await new Promise((resolve) => {
-                const reader = new FileReader()
-                reader.onload = (evt) => {
-                  const result = evt.target.result
-                  const base64 = result.split(',')[1]
-                  resolve(base64)
-                }
-                reader.onerror = () => resolve('')
-                reader.readAsDataURL(file)
+              const formData = new FormData()
+              formData.append('deviceId', deviceId)
+              formData.append('file', file, file.name)
+
+              const upResponse = await quizBankApiRequest('/api/user-notes', {
+                method: 'POST',
+                body: formData
               })
 
-              if (base64Data) {
-                const upResponse = await browser.runtime.sendMessage({
-                  type: 'quizbank-upload-user-note',
-                  deviceId,
-                  filename: file.name,
-                  content: base64Data,
-                  mimeType: file.type
-                })
-
-                if (upResponse && upResponse.ok && upResponse.note) {
-                  existingSelected.push(Number(upResponse.note.id))
-                }
+              if (upResponse && upResponse.ok && upResponse.note) {
+                existingSelected.push(Number(upResponse.note.id))
               }
             }
 
