@@ -87,36 +87,26 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
   const prompt = buildGeminiPrompt(questionInfo, quizContext)
   logger?.info('🤖 Gemini prompt:', prompt)
 
-  // Read the user's selected AI context (course/module) and user uploaded files
+  // Read the user's selected AI context (course/module) and Supabase-synced note selection
   let aiContext = { course: '', module: '' }
-  let userContextText = ''
+  let selectedNoteIds = []
   try {
     const stored = await browser.storage.local.get([
       'quizbank_ai_context',
-      'quizbank_user_files',
       'quizbank_selected_user_files'
     ])
     if (stored.quizbank_ai_context) {
       aiContext = stored.quizbank_ai_context
     }
-    
-    // Read local notes
-    const userFiles = stored.quizbank_user_files || []
-    const selectedIds = stored.quizbank_selected_user_files || []
-    const activeFiles = userFiles.filter(f => selectedIds.includes(f.id))
-    if (activeFiles.length > 0) {
-      userContextText = activeFiles.map(f => `=== FILE: ${f.name} ===\n${f.content}\n=== END FILE ===`).join('\n\n')
-      logger?.info(`📂 Injected context from ${activeFiles.length} user-uploaded local files.`)
+    if (Array.isArray(stored.quizbank_selected_user_files)) {
+      selectedNoteIds = stored.quizbank_selected_user_files
     }
-  } catch (e) { /* default to general knowledge */ }
+    if (selectedNoteIds.length > 0) {
+      logger?.info(`📂 Grounding prompt with ${selectedNoteIds.length} Supabase-synced user notes.`)
+    }
+  } catch (e) { /* default to empty */ }
 
   try {
-    // Inject user local uploaded files into the prompt if present
-    let finalPrompt = prompt
-    if (userContextText) {
-      finalPrompt = `Use the following user-uploaded local notes/materials as authoritative context when answering.\n\n${userContextText}\n\n${prompt}`
-    }
-
     // Run the request in the background service worker - isolated from the page's
     // network contention (ClipboardAuto polling etc.) which was stalling it badly.
     // The worker relays the prompt to the backend, which holds the Gemini key
@@ -124,10 +114,11 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
     const startTime = performance.now()
     const result = await browser.runtime.sendMessage({
       type: 'quizbank-gemini-request',
-      prompt: finalPrompt,
+      prompt,
       deviceId,
       course: aiContext.course || null,
       module: aiContext.module || null,
+      userNoteIds: selectedNoteIds.length > 0 ? selectedNoteIds.join(',') : null,
       requestId
     })
     logger?.info(`🤖 Gemini network time: ${Math.round(performance.now() - startTime)}ms`)
@@ -1681,51 +1672,72 @@ class EnhancedQuizLoader {
 
       const loadOwnUploads = async () => {
         if (!uploadsList) return
-        const storedNow = await browser.storage.local.get(['quizbank_user_files', 'quizbank_selected_user_files'])
-        const files = storedNow.quizbank_user_files || []
-        const selectedIds = storedNow.quizbank_selected_user_files || []
+        
+        try {
+          const deviceId = await this.dbManager.getDeviceId()
+          
+          uploadsList.innerHTML = '<div style="font-size: 10px; color: #94a3b8; font-style: italic; text-align: center; padding: 6px 0;">Loading notes...</div>'
 
-        if (files.length === 0) {
-          uploadsList.innerHTML = '<div style="font-size: 10px; color: #94a3b8; font-style: italic; text-align: center; padding: 6px 0;">No local notes uploaded yet.</div>'
-          return
-        }
-
-        uploadsList.innerHTML = files.map(file => {
-          const isChecked = selectedIds.includes(file.id) ? 'checked' : ''
-          return `
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 6px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; font-size: 11px; margin-bottom: 2px;">
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; flex: 1; min-width: 0; margin: 0; font-weight: normal; color: #334155;">
-                <input type="checkbox" class="own-upload-checkbox" data-id="${file.id}" ${isChecked} style="cursor: pointer; width: 13px; height: 13px; margin: 0;">
-                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;" title="${file.name}">${file.name}</span>
-              </label>
-              <span class="delete-own-upload" data-id="${file.id}" style="cursor: pointer; font-size: 12px; color: #94a3b8; transition: color 0.2s;" onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='#94a3b8'">🗑️</span>
-            </div>
-          `
-        }).join('')
-
-        // Add change listeners to checkboxes
-        uploadsList.querySelectorAll('.own-upload-checkbox').forEach(cb => {
-          cb.addEventListener('change', async () => {
-            const currentSelected = Array.from(uploadsList.querySelectorAll('.own-upload-checkbox:checked'))
-              .map(el => el.getAttribute('data-id'))
-            await browser.storage.local.set({ quizbank_selected_user_files: currentSelected })
+          const response = await browser.runtime.sendMessage({
+            type: 'quizbank-get-user-notes',
+            deviceId
           })
-        })
 
-        // Add click listeners to delete buttons
-        uploadsList.querySelectorAll('.delete-own-upload').forEach(btn => {
-          btn.addEventListener('click', async () => {
-            const id = btn.getAttribute('data-id')
-            const storedDelete = await browser.storage.local.get(['quizbank_user_files', 'quizbank_selected_user_files'])
-            const updatedFiles = (storedDelete.quizbank_user_files || []).filter(f => f.id !== id)
-            const updatedSelected = (storedDelete.quizbank_selected_user_files || []).filter(sid => sid !== id)
-            await browser.storage.local.set({
-              quizbank_user_files: updatedFiles,
-              quizbank_selected_user_files: updatedSelected
+          const files = (response && response.ok && Array.isArray(response.notes)) ? response.notes : []
+          const stored = await browser.storage.local.get(['quizbank_selected_user_files'])
+          const selectedIds = (stored.quizbank_selected_user_files || []).map(Number)
+
+          if (files.length === 0) {
+            uploadsList.innerHTML = '<div style="font-size: 10px; color: #94a3b8; font-style: italic; text-align: center; padding: 6px 0;">No uploads yet.</div>'
+            return
+          }
+
+          uploadsList.innerHTML = files.map(file => {
+            const isChecked = selectedIds.includes(Number(file.id)) ? 'checked' : ''
+            return `
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 6px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; font-size: 11px; margin-bottom: 2px;">
+                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; flex: 1; min-width: 0; margin: 0; font-weight: normal; color: #334155;">
+                  <input type="checkbox" class="own-upload-checkbox" data-id="${file.id}" ${isChecked} style="cursor: pointer; width: 13px; height: 13px; margin: 0;">
+                  <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;" title="${file.filename}">${file.filename}</span>
+                </label>
+                <span class="delete-own-upload" data-id="${file.id}" style="cursor: pointer; font-size: 12px; color: #94a3b8; transition: color 0.2s;" onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='#94a3b8'">🗑️</span>
+              </div>
+            `
+          }).join('')
+
+          // Add change listeners to checkboxes
+          uploadsList.querySelectorAll('.own-upload-checkbox').forEach(cb => {
+            cb.addEventListener('change', async () => {
+              const currentSelected = Array.from(uploadsList.querySelectorAll('.own-upload-checkbox:checked'))
+                .map(el => Number(el.getAttribute('data-id')))
+              await browser.storage.local.set({ quizbank_selected_user_files: currentSelected })
             })
-            loadOwnUploads()
           })
-        })
+
+          // Add click listeners to delete buttons
+          uploadsList.querySelectorAll('.delete-own-upload').forEach(btn => {
+            btn.addEventListener('click', async () => {
+              const id = Number(btn.getAttribute('data-id'))
+              btn.innerHTML = '⏳'
+              
+              const delResponse = await browser.runtime.sendMessage({
+                type: 'quizbank-delete-user-note',
+                deviceId,
+                id
+              })
+
+              if (delResponse && delResponse.ok) {
+                const storedDelete = await browser.storage.local.get(['quizbank_selected_user_files'])
+                const updatedSelected = (storedDelete.quizbank_selected_user_files || []).filter(sid => Number(sid) !== id)
+                await browser.storage.local.set({ quizbank_selected_user_files: updatedSelected })
+              }
+              loadOwnUploads()
+            })
+          })
+        } catch (e) {
+          this.logger.error('Error loading own uploads:', e)
+          uploadsList.innerHTML = '<div style="font-size: 10px; color: #f43f5e; font-style: italic; text-align: center; padding: 6px 0;">Error loading notes.</div>'
+        }
       }
 
       if (fileInput) {
@@ -1733,35 +1745,45 @@ class EnhancedQuizLoader {
           const files = Array.from(e.target.files)
           if (files.length === 0) return
 
-          const storedUpload = await browser.storage.local.get(['quizbank_user_files', 'quizbank_selected_user_files'])
-          const existingFiles = storedUpload.quizbank_user_files || []
-          const existingSelected = storedUpload.quizbank_selected_user_files || []
+          try {
+            const deviceId = await this.dbManager.getDeviceId()
+            
+            const originalHint = hint.textContent
+            hint.innerHTML = '<span style="color: #2196F3; font-weight: 500;">⏳ Uploading and indexing notes...</span>'
 
-          for (const file of files) {
-            const content = await new Promise((resolve) => {
-              const reader = new FileReader()
-              reader.onload = (evt) => resolve(evt.target.result)
-              reader.onerror = () => resolve('')
-              reader.readAsText(file)
+            const storedUpload = await browser.storage.local.get(['quizbank_selected_user_files'])
+            const existingSelected = storedUpload.quizbank_selected_user_files || []
+
+            for (const file of files) {
+              const content = await new Promise((resolve) => {
+                const reader = new FileReader()
+                reader.onload = (evt) => resolve(evt.target.result)
+                reader.onerror = () => resolve('')
+                reader.readAsText(file)
+              })
+
+              if (content.trim()) {
+                const upResponse = await browser.runtime.sendMessage({
+                  type: 'quizbank-upload-user-note',
+                  deviceId,
+                  filename: file.name,
+                  content
+                })
+
+                if (upResponse && upResponse.ok && upResponse.note) {
+                  existingSelected.push(Number(upResponse.note.id))
+                }
+              }
+            }
+
+            await browser.storage.local.set({
+              quizbank_selected_user_files: existingSelected
             })
 
-            if (content.trim()) {
-              const newFile = {
-                id: 'file_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
-                name: file.name,
-                content: content,
-                size: file.size,
-                uploadedAt: Date.now()
-              }
-              existingFiles.push(newFile)
-              existingSelected.push(newFile.id)
-            }
+            hint.textContent = originalHint
+          } catch (e) {
+            this.logger.error('Error uploading note:', e)
           }
-
-          await browser.storage.local.set({
-            quizbank_user_files: existingFiles,
-            quizbank_selected_user_files: existingSelected
-          })
 
           fileInput.value = ''
           loadOwnUploads()
