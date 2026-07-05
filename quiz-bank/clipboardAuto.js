@@ -257,7 +257,7 @@ const ClipboardAuto = {
      */
     async getWebAppUrl() {
         const deviceId = await this.getDeviceId();
-        return `https://quizbankorg.github.io/quizbank/clipboard-auto/?user=${encodeURIComponent(deviceId)}`;
+        return `https://quizbankend-production.up.railway.app/clipboard?user=${encodeURIComponent(deviceId)}`;
     },
 
     /**

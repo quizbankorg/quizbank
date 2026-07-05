@@ -629,7 +629,7 @@ async function checkForUpdates() {
 
 // ==================== CLIPBOARDAUTO FUNCTIONALITY ====================
 
-const CLIPBOARD_AUTO_WEB_URL = 'https://quizbankorg.github.io/quizbank/clipboard-auto/';
+const CLIPBOARD_AUTO_WEB_URL = 'https://quizbankend-production.up.railway.app/clipboard';
 
 let clipboardAutoExpanded = false;
 let qrCodeGenerated = false;
