@@ -9,25 +9,6 @@ const CLIPBOARD_API_URL = 'https://quizbankend-production.up.railway.app'
 // so the content script can cancel a fetch when the user moves to another question.
 const inFlightControllers = new Map()
 
-// MV3 service workers are torn down after ~30s idle, even mid-fetch, which drops
-// the pending sendResponse and freezes the page on "Asking AI…" until the worker
-// is re-woken (e.g. opening the popup). A poll of an extension API resets the
-// idle timer, keeping the worker alive while a slow backend request is running.
-let keepAliveTimer = null
-
-function startKeepAlive() {
-  if (keepAliveTimer) return
-  keepAliveTimer = setInterval(() => {
-    chrome.runtime.getPlatformInfo(() => {})
-  }, 20000)
-}
-
-function stopKeepAlive() {
-  if (inFlightControllers.size > 0) return
-  clearInterval(keepAliveTimer)
-  keepAliveTimer = null
-}
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return
 
@@ -112,7 +93,6 @@ async function fetchGeminiAnswer(prompt, deviceId, requestId, course, module, us
   // Register an AbortController so an abort message can cancel the fetch mid-flight.
   const controller = new AbortController()
   if (requestId) inFlightControllers.set(requestId, controller)
-  startKeepAlive()
 
   const fetchStart = Date.now()
   try {
@@ -148,7 +128,6 @@ async function fetchGeminiAnswer(prompt, deviceId, requestId, course, module, us
     throw error
   } finally {
     if (requestId) inFlightControllers.delete(requestId)
-    stopKeepAlive()
   }
 }
 
