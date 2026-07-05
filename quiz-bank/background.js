@@ -31,13 +31,6 @@ function stopKeepAlive() {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return
 
-  // Liveness probe from the content script - lets it detect a suspended worker
-  // (Orion iOS) and fall back to fetching the backend directly.
-  if (message.type === 'quizbank-ping') {
-    sendResponse({ ok: true })
-    return true
-  }
-
   if (message.type === 'quizbank-gemini-request') {
     console.log('[QuizBank BG] gemini request received')
     fetchGeminiAnswer(message.prompt, message.deviceId, message.requestId, message.course, message.module, message.userNoteIds)
