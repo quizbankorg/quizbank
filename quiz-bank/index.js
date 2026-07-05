@@ -83,59 +83,9 @@ function buildGeminiPrompt(questionInfo, quizContext) {
  * Ask Gemini for an answer. Returns { status, answer } where status is
  * 'ok' | 'failed' | 'aborted'. requestId lets the caller abort the in-flight fetch.
  */
-// ==================== TEMP DEBUG OVERLAY (mobile diagnosis) ====================
-// On-page log panel - remove once the Orion iOS AI-path stall is diagnosed.
-function debugOverlay(message) {
-  let panel = document.getElementById('qb-debug-overlay')
-  if (!panel) {
-    panel = document.createElement('div')
-    panel.id = 'qb-debug-overlay'
-    panel.style.cssText = `
-      position: fixed; bottom: 0; left: 0; right: 0; z-index: 999999;
-      max-height: 40vh; overflow-y: auto; background: rgba(0,0,0,0.85);
-      color: #0f0; font: 10px/1.4 monospace; padding: 6px; pointer-events: none;
-    `
-    document.documentElement.appendChild(panel)
-  }
-  const line = document.createElement('div')
-  line.textContent = `${new Date().toISOString().slice(11, 23)} ${message}`
-  panel.appendChild(line)
-  panel.scrollTop = panel.scrollHeight
-}
-
-// Probe every worker response-delivery mechanism; overlay-log which arrive.
-// Temp (Orion diagnosis) - tells us in one install which channel is viable.
-async function probeWorkerChannels() {
-  const timed = (name, promise) =>
-    Promise.race([
-      promise.then(r => debugOverlay(`probe ${name}: ✅ ${JSON.stringify(r)}`)),
-      new Promise(resolve => setTimeout(resolve, 3000)).then(() => debugOverlay(`probe ${name}: ❌ timeout`))
-    ]).catch(e => debugOverlay(`probe ${name}: ❌ threw ${e?.message || e}`))
-
-  debugOverlay('--- worker channel probes ---')
-  await timed('sync', browser.runtime.sendMessage({ type: 'quizbank-probe-sync' }))
-  await timed('microtask', browser.runtime.sendMessage({ type: 'quizbank-probe-microtask' }))
-  await timed('timeout250', browser.runtime.sendMessage({ type: 'quizbank-probe-timeout' }))
-  await timed('promise-return', browser.runtime.sendMessage({ type: 'quizbank-probe-promise' }))
-
-  await timed('port', new Promise((resolve, reject) => {
-    try {
-      const port = browser.runtime.connect({ name: 'quizbank-probe-port' })
-      port.onMessage.addListener(response => { resolve(response); port.disconnect() })
-      port.onDisconnect.addListener(() => reject(new Error('port disconnected')))
-      port.postMessage({ ping: true })
-    } catch (e) { reject(e) }
-  }))
-
-  // The real question: does a worker-side fetch's response make it back?
-  await timed('real-fetch(health)', browser.runtime.sendMessage({ type: 'quizbank-clipboard-wake' }))
-  debugOverlay('--- probes done ---')
-}
-
 async function askGemini(questionInfo, quizContext, deviceId, logger, requestId) {
   const prompt = buildGeminiPrompt(questionInfo, quizContext)
   logger?.info('🤖 Gemini prompt:', prompt)
-  debugOverlay('askGemini: prompt built')
 
   // Read the user's selected AI context (course/module) and Supabase-synced note selection
   let aiContext = { course: '', module: '' }
@@ -163,7 +113,6 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
       logger?.info(`📂 Grounding prompt with selected notes: ${selectedNoteNames.join(', ')}`)
     }
   } catch (e) { /* default to empty */ }
-  debugOverlay('askGemini: storage read done, sending to worker')
 
   const payload = {
     prompt,
@@ -175,18 +124,14 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
   }
 
   try {
-    // Run the request in the background service worker - isolated from the page's
-    // network contention (ClipboardAuto polling etc.) which was stalling it badly.
-    // The worker relays the prompt to the backend, which holds the Gemini key
-    // and validates the device's voucher before answering.
-    //
-    // Some browsers (Orion iOS) suspend the worker mid-request and never deliver
-    // the response, so race it against a timeout and fall back to fetching the
-    // backend directly from the content script (backend CORS allows it).
+    // Fetch the backend directly from the content script. The old background-
+    // worker relay is gone: Orion iOS never delivers worker responses once the
+    // worker suspends, freezing the UI. The backend holds the Gemini key,
+    // validates the device's voucher, and allows CORS from page context.
     const startTime = performance.now()
-    const result = await askGeminiViaWorkerOrDirect(payload, logger)
+    const result = await fetchGeminiDirect(payload)
+    if (!result?.ok && result?.error) logger?.warn(`Gemini direct fetch failed: ${result.error}`)
     logger?.info(`🤖 Gemini network time: ${Math.round(performance.now() - startTime)}ms`)
-    debugOverlay(`askGemini: worker responded in ${Math.round(performance.now() - startTime)}ms ok=${result?.ok} aborted=${result?.aborted} err=${result?.error || '-'}`)
 
     if (result?.aborted) {
       logger?.info('🤖 Gemini request aborted (moved to another question)')
@@ -206,36 +151,19 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
     return { status: 'ok', answer: result.answer }
   } catch (error) {
     logger?.warn('Gemini request error:', error)
-    debugOverlay(`askGemini: sendMessage threw: ${error?.message || error}`)
     return { status: 'failed' }
   }
 }
 
-// Backend that relays prompts to Gemini (same one the background worker uses).
+// Backend that relays prompts to Gemini.
 const QUIZBANK_API_URL = 'https://quizbankend-production.up.railway.app'
 
-// AbortControllers for direct (content-script) Gemini fetches, keyed by requestId.
+// AbortControllers for in-flight Gemini fetches, keyed by requestId.
 const directGeminiControllers = new Map()
 
 /**
- * Send the Gemini request straight to the backend from the content script.
- * Returns the same shape the worker returned: { ok, answer?, aborted?, error? }.
- */
-async function askGeminiViaWorkerOrDirect(payload, logger) {
-  // Worker relay abandoned: Orion iOS drops every worker->page response channel
-  // (sync/async sendResponse, promise-return, ports - all probed dead), and
-  // liveness detection proved unreliable. Backend CORS allows page-context
-  // fetches, so the content script always calls the backend directly.
-  debugOverlay('route: direct fetch (worker relay bypassed)')
-  const direct = await fetchGeminiDirect(payload)
-  debugOverlay(`route: direct fetch done ok=${direct?.ok} err=${direct?.error || '-'}`)
-  if (!direct?.ok && direct?.error) logger?.warn(`Gemini direct fetch failed: ${direct.error}`)
-  return direct
-}
-
-/**
- * Direct content-script fetch to the backend (fallback when the worker is dead).
- * Mirrors background.js fetchGeminiAnswer, abortable via abortGeminiRequest.
+ * Fetch the Gemini answer from the backend, abortable via abortGeminiRequest.
+ * Returns { ok, answer?, aborted?, error? }.
  */
 async function fetchGeminiDirect({ prompt, deviceId, course, module: moduleName, userNoteIds, requestId }) {
   const controller = new AbortController()
@@ -269,11 +197,10 @@ async function fetchGeminiDirect({ prompt, deviceId, course, module: moduleName,
 }
 
 /**
- * Abort an in-flight Gemini fetch - both the worker's and any direct fallback.
+ * Abort an in-flight Gemini fetch.
  */
 function abortGeminiRequest(requestId) {
   if (!requestId) return
-  browser.runtime.sendMessage({ type: 'quizbank-gemini-abort', requestId }).catch(() => { })
   const controller = directGeminiControllers.get(requestId)
   if (controller) {
     controller.abort()
@@ -911,12 +838,8 @@ class EnhancedQuizLoader {
    * Starting a question aborts any other still-in-flight request.
    */
   async triggerAI(questionId) {
-    debugOverlay(`triggerAI: ${questionId}`)
     const entry = this.aiRegistry.get(questionId)
-    if (!entry) {
-      debugOverlay('triggerAI: no registry entry - exiting')
-      return
-    }
+    if (!entry) return
 
     if (entry.state === 'asking') {
       this.logger.info(`AI already running for ${questionId} - ignoring`)
@@ -941,9 +864,7 @@ class EnhancedQuizLoader {
       options: entry.question.options
     }
 
-    debugOverlay('triggerAI: state=asking, getting deviceId')
     const deviceId = await this.dbManager.getDeviceId()
-    debugOverlay(`triggerAI: deviceId ${deviceId ? 'ok' : 'MISSING'}`)
     const result = await askGemini(
       questionInfo,
       entry.quizContext,
@@ -952,10 +873,8 @@ class EnhancedQuizLoader {
       requestId
     )
 
-    debugOverlay(`triggerAI: askGemini returned status=${result.status}`)
     // Discard if this request was superseded/aborted (entry reused or registry cleared).
     if (entry.requestId !== requestId) {
-      debugOverlay('triggerAI: request superseded - discarding')
       return
     }
     if (result.status === 'aborted') {
@@ -981,9 +900,7 @@ class EnhancedQuizLoader {
         entry.button.remove()
         entry.button = null
       }
-      debugOverlay('triggerAI: displaying AI answer in DOM')
       entry.displayer.displayAIAnswer(aiQuestion, questionId, entry.questionType)
-      debugOverlay('triggerAI: DOM updated')
       // Badge only when not in stealth (stealth uses the divider-fade tell).
       if (!this.stealthMode) {
         this.addSourceBadge(questionId, 'ai')
@@ -2901,7 +2818,6 @@ async function enhancedMain() {
   const loader = new EnhancedQuizLoader()
   currentLoader = loader // expose for global right-click/unload handlers
   attachAIGlobalListeners()
-  probeWorkerChannels() // temp: Orion channel diagnosis (fire-and-forget)
 
   // Wait for BYUI if needed
   if (isByui()) await wait(2)

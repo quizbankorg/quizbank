@@ -1,59 +1,10 @@
-// Background service worker.
-// Runs the Gemini API call here so it is isolated from the quiz page's network
-// contention (e.g. ClipboardAuto's polling to a slow/sleeping Render server).
-
-// The Gemini API key lives on the backend now; the worker only relays prompts.
+// Background service worker: relays clipboard/materials/user-note requests to
+// the backend. Gemini requests are fetched directly by the content script -
+// Orion iOS never delivers worker responses once the worker suspends.
 const CLIPBOARD_API_URL = 'https://quizbankend-production.up.railway.app'
-
-// AbortControllers for in-flight Gemini requests, keyed by requestId,
-// so the content script can cancel a fetch when the user moves to another question.
-const inFlightControllers = new Map()
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return
-
-  // Liveness probe from the content script. Responds ASYNCHRONOUSLY on purpose:
-  // Orion iOS delivers synchronous sendResponse but silently drops async ones
-  // (the pattern every real handler here uses), so an async pong is the correct
-  // capability test - if it never arrives, the content script fetches directly.
-  if (message.type === 'quizbank-ping') {
-    setTimeout(() => sendResponse({ ok: true }), 250)
-    return true
-  }
-
-  // Capability probes (temp, Orion diagnosis): each exercises a different
-  // response-delivery mechanism so the content script can log which arrive.
-  if (message.type === 'quizbank-probe-sync') {
-    sendResponse({ ok: true, probe: 'sync' })
-    return true
-  }
-  if (message.type === 'quizbank-probe-microtask') {
-    Promise.resolve().then(() => sendResponse({ ok: true, probe: 'microtask' }))
-    return true
-  }
-  if (message.type === 'quizbank-probe-timeout') {
-    setTimeout(() => sendResponse({ ok: true, probe: 'timeout' }), 250)
-    return true
-  }
-
-  if (message.type === 'quizbank-gemini-request') {
-    console.log('[QuizBank BG] gemini request received')
-    fetchGeminiAnswer(message.prompt, message.deviceId, message.requestId, message.course, message.module, message.userNoteIds)
-      .then(sendResponse)
-      .catch(error => sendResponse({ ok: false, error: String(error) }))
-    return true // keep the channel open for the async response
-  }
-
-  if (message.type === 'quizbank-gemini-abort') {
-    const controller = inFlightControllers.get(message.requestId)
-    if (controller) {
-      controller.abort()
-      inFlightControllers.delete(message.requestId)
-      console.log(`[QuizBank BG] aborted gemini request ${message.requestId}`)
-    }
-    sendResponse({ ok: true })
-    return true
-  }
 
   if (message.type === 'quizbank-clipboard-post') {
     postClipboardContent(message.deviceId, message.text)
@@ -99,27 +50,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Not our message - let other listeners handle it
 })
 
-// Probe: promise-return response style (Firefox/Safari browser.* convention).
-// Registered on browser.runtime when available - some WebKit browsers deliver
-// these even when callback-style async sendResponse is dropped.
-if (typeof browser !== 'undefined' && browser?.runtime?.onMessage) {
-  browser.runtime.onMessage.addListener((message) => {
-    if (message?.type === 'quizbank-probe-promise') {
-      return new Promise(resolve =>
-        setTimeout(() => resolve({ ok: true, probe: 'promise' }), 250)
-      )
-    }
-  })
-}
-
-// Probe: port-based messaging - a long-lived channel instead of sendResponse.
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== 'quizbank-probe-port') return
-  port.onMessage.addListener(() => {
-    setTimeout(() => port.postMessage({ ok: true, probe: 'port' }), 250)
-  })
-})
-
 async function postClipboardContent(deviceId, text) {
   const response = await fetch(`${CLIPBOARD_API_URL}/api/${deviceId}`, {
     method: 'POST',
@@ -132,48 +62,6 @@ async function postClipboardContent(deviceId, text) {
 async function wakeClipboardServer() {
   await fetch(`${CLIPBOARD_API_URL}/health`, { method: 'GET' })
   return { ok: true }
-}
-
-async function fetchGeminiAnswer(prompt, deviceId, requestId, course, module, userNoteIds) {
-  // Register an AbortController so an abort message can cancel the fetch mid-flight.
-  const controller = new AbortController()
-  if (requestId) inFlightControllers.set(requestId, controller)
-
-  const fetchStart = Date.now()
-  try {
-    const response = await fetch(`${CLIPBOARD_API_URL}/api/gemini`, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt,
-        deviceId,
-        course: course || null,
-        module: module || null,
-        userNoteIds: userNoteIds || null
-      })
-    })
-
-    console.log(`[QuizBank BG] gemini fetch took ${Date.now() - fetchStart}ms (worker context)`)
-
-    const data = await response.json().catch(() => ({}))
-
-    if (response.status === 499 || data.aborted) {
-      return { ok: false, aborted: true }
-    }
-    if (!response.ok || !data.ok) {
-      return { ok: false, status: response.status, error: data.error }
-    }
-    return { ok: true, answer: data.answer || null, grounding_type: data.grounding_type || 'general_knowledge' }
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      console.log('[QuizBank BG] gemini fetch aborted')
-      return { ok: false, aborted: true }
-    }
-    throw error
-  } finally {
-    if (requestId) inFlightControllers.delete(requestId)
-  }
 }
 
 async function fetchMaterials(deviceId) {
