@@ -1,0 +1,56 @@
+name: Release extension
+
+# Packages the extension into a clean quizbank.zip and attaches it to a GitHub
+# Release whenever a version tag is pushed. The download page always links to
+# releases/latest/download/quizbank.zip, so publishing a release updates it
+# automatically - no manual asset handling.
+#
+# Usage:  git tag v2.2.1 && git push origin v2.2.1
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Stamp version from tag
+        run: |
+          # The tag (e.g. v2.2.1) is the single source of truth. Strip the leading
+          # "v" and write it into manifest.json so the shipped zip always matches
+          # the release - no chance of the manifest and tag drifting apart.
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Releasing version $VERSION"
+          if ! echo "$VERSION" | grep -qE '^[0-9]+(\.[0-9]+){0,3}$'; then
+            echo "::error::Tag '$GITHUB_REF_NAME' is not a valid extension version (expected vMAJOR.MINOR.PATCH)"
+            exit 1
+          fi
+          tmp=$(mktemp)
+          jq --arg v "$VERSION" '.version = $v' manifest.json > "$tmp" && mv "$tmp" manifest.json
+          echo "manifest.json version -> $(jq -r .version manifest.json)"
+
+      - name: Package extension
+        run: |
+          # Only the files the browser needs - no repo metadata or docs.
+          zip -r quizbank.zip \
+            manifest.json \
+            assets \
+            database \
+            popup \
+            quiz-bank \
+            -x '*.DS_Store' -x '*/.DS_Store'
+          echo "Packaged:"; unzip -l quizbank.zip | tail -5
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: quizbank.zip
+          generate_release_notes: true
