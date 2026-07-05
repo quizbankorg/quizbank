@@ -14,7 +14,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'quizbank-gemini-request') {
     console.log('[QuizBank BG] gemini request received')
-    fetchGeminiAnswer(message.prompt, message.deviceId, message.requestId)
+    fetchGeminiAnswer(message.prompt, message.deviceId, message.requestId, message.course, message.module)
       .then(sendResponse)
       .catch(error => sendResponse({ ok: false, error: String(error) }))
     return true // keep the channel open for the async response
@@ -61,7 +61,7 @@ async function wakeClipboardServer() {
   return { ok: true }
 }
 
-async function fetchGeminiAnswer(prompt, deviceId, requestId) {
+async function fetchGeminiAnswer(prompt, deviceId, requestId, course, module) {
   // Register an AbortController so an abort message can cancel the fetch mid-flight.
   const controller = new AbortController()
   if (requestId) inFlightControllers.set(requestId, controller)
@@ -72,7 +72,7 @@ async function fetchGeminiAnswer(prompt, deviceId, requestId) {
       method: 'POST',
       signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, deviceId })
+      body: JSON.stringify({ prompt, deviceId, course: course || null, module: module || null })
     })
 
     console.log(`[QuizBank BG] gemini fetch took ${Date.now() - fetchStart}ms (worker context)`)

@@ -41,8 +41,14 @@ const elements = {
   qrCode: document.getElementById('qr-code'),
   stealthToggle: document.getElementById('stealth-toggle'),
   aiToggle: document.getElementById('ai-toggle'),
-  clipboardToggle: document.getElementById('clipboard-toggle')
+  clipboardToggle: document.getElementById('clipboard-toggle'),
+  aiContextCourse: document.getElementById('ai-context-course'),
+  aiContextModule: document.getElementById('ai-context-module'),
+  aiContextHint: document.getElementById('ai-context-hint')
 };
+
+// Backend that serves the material catalog (same host as the AI endpoint).
+const QUIZBANK_API_URL = 'https://quizbankend-production.up.railway.app';
 
 // ==================== DEVICE ID MANAGEMENT ====================
 
@@ -740,6 +746,8 @@ async function initializePopup() {
     showMainContent(accessInfo);
     // Setup ClipboardAuto collapsible section
     setupClipboardAuto();
+    // Setup AI context picker (course/module material selection)
+    setupAIContextPicker();
   } else {
     showAccessGate();
     setupVoucherForm();
@@ -750,6 +758,75 @@ async function initializePopup() {
 
   // Display version
   displayVersion();
+}
+
+/**
+ * AI Context picker: lets the user choose which uploaded course/module the AI
+ * should use as context. The selection is stored and read by the content script
+ * when it makes AI requests. Empty selection = general knowledge.
+ */
+async function setupAIContextPicker() {
+  const courseSelect = elements.aiContextCourse;
+  const moduleSelect = elements.aiContextModule;
+  if (!courseSelect || !moduleSelect) return;
+
+  let catalog = [];
+
+  // Restore any saved selection.
+  const saved = await browser.storage.local.get(['quizbank_ai_context']);
+  const savedContext = saved.quizbank_ai_context || { course: '', module: '' };
+
+  const persist = () => {
+    browser.storage.local.set({
+      quizbank_ai_context: {
+        course: courseSelect.value,
+        module: moduleSelect.value
+      }
+    });
+  };
+
+  const renderModules = (course, selectedModule = '') => {
+    const entry = catalog.find(item => item.course === course);
+    const modules = entry ? entry.modules : [];
+    moduleSelect.innerHTML = '<option value="">Whole course</option>' +
+      modules.map(module => `<option value="${module}">Module ${module}</option>`).join('');
+    moduleSelect.value = selectedModule;
+    moduleSelect.classList.toggle('hidden', !course || modules.length === 0);
+  };
+
+  try {
+    const deviceId = await getDeviceId();
+    const response = await fetch(`${QUIZBANK_API_URL}/api/materials?deviceId=${encodeURIComponent(deviceId)}`);
+    const data = await response.json();
+    catalog = (data && data.ok && Array.isArray(data.courses)) ? data.courses : [];
+  } catch (e) {
+    catalog = [];
+  }
+
+  if (catalog.length === 0) {
+    elements.aiContextHint.textContent = 'No course materials available yet.';
+    return;
+  }
+
+  // Populate courses.
+  courseSelect.innerHTML = '<option value="">General knowledge (no material)</option>' +
+    catalog.map(item => `<option value="${item.course}">${item.course}</option>`).join('');
+  courseSelect.value = savedContext.course || '';
+  renderModules(courseSelect.value, savedContext.module || '');
+
+  elements.aiContextHint.textContent = courseSelect.value
+    ? 'The AI will use this material as context.'
+    : 'Pick a course to have the AI use your uploaded material.';
+
+  courseSelect.addEventListener('change', () => {
+    renderModules(courseSelect.value, '');
+    elements.aiContextHint.textContent = courseSelect.value
+      ? 'The AI will use this material as context.'
+      : 'Pick a course to have the AI use your uploaded material.';
+    persist();
+  });
+
+  moduleSelect.addEventListener('change', persist);
 }
 
 /**

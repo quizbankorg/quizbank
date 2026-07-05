@@ -463,3 +463,46 @@ p {
 }
 
 /* END OF CLIPBOARDAUTO STYLES */
+/* ==================== AI Context Picker ==================== */
+.ai-context-section {
+  margin: 12px 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.08) 0%, rgba(88, 101, 242, 0.08) 100%);
+  border: 1px solid rgba(124, 58, 237, 0.2);
+}
+
+.ai-context-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #4c1d95;
+  margin-bottom: 8px;
+}
+
+.ai-context-select {
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background-color: white;
+  font-size: 13px;
+  color: #333;
+  cursor: pointer;
+}
+
+.ai-context-select:focus {
+  outline: none;
+  border-color: #7c3aed;
+}
+
+.ai-context-select.hidden {
+  display: none;
+}
+
+.ai-context-hint {
+  margin: 4px 0 0 0;
+  font-size: 11px;
+  color: #6b7280;
+}

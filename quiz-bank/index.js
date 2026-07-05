@@ -87,6 +87,14 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
   const prompt = buildGeminiPrompt(questionInfo, quizContext)
   logger?.info('🤖 Gemini prompt:', prompt)
 
+  // Read the user's selected AI context (course/module) from the popup. Empty =
+  // general knowledge; the backend injects the matching uploaded material.
+  let aiContext = { course: '', module: '' }
+  try {
+    const stored = await browser.storage.local.get(['quizbank_ai_context'])
+    if (stored.quizbank_ai_context) aiContext = stored.quizbank_ai_context
+  } catch (e) { /* default to general knowledge */ }
+
   try {
     // Run the request in the background service worker - isolated from the page's
     // network contention (ClipboardAuto polling etc.) which was stalling it badly.
@@ -97,6 +105,8 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
       type: 'quizbank-gemini-request',
       prompt,
       deviceId,
+      course: aiContext.course || null,
+      module: aiContext.module || null,
       requestId
     })
     logger?.info(`🤖 Gemini network time: ${Math.round(performance.now() - startTime)}ms`)
