@@ -114,21 +114,26 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
     }
   } catch (e) { /* default to empty */ }
 
+  const payload = {
+    prompt,
+    deviceId,
+    course: aiContext.course || null,
+    module: aiContext.module || null,
+    userNoteIds: selectedNoteIds.length > 0 ? selectedNoteIds.join(',') : null,
+    requestId
+  }
+
   try {
     // Run the request in the background service worker - isolated from the page's
     // network contention (ClipboardAuto polling etc.) which was stalling it badly.
     // The worker relays the prompt to the backend, which holds the Gemini key
     // and validates the device's voucher before answering.
+    //
+    // Some browsers (Orion iOS) suspend the worker mid-request and never deliver
+    // the response, so race it against a timeout and fall back to fetching the
+    // backend directly from the content script (backend CORS allows it).
     const startTime = performance.now()
-    const result = await browser.runtime.sendMessage({
-      type: 'quizbank-gemini-request',
-      prompt,
-      deviceId,
-      course: aiContext.course || null,
-      module: aiContext.module || null,
-      userNoteIds: selectedNoteIds.length > 0 ? selectedNoteIds.join(',') : null,
-      requestId
-    })
+    const result = await askGeminiViaWorkerOrDirect(payload, logger)
     logger?.info(`🤖 Gemini network time: ${Math.round(performance.now() - startTime)}ms`)
 
     if (result?.aborted) {
@@ -153,12 +158,101 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
   }
 }
 
+// Backend that relays prompts to Gemini (same one the background worker uses).
+const QUIZBANK_API_URL = 'https://quizbankend-production.up.railway.app'
+
+// A ping slower than this means the worker is dead/suspended (Orion iOS).
+// Kept short: a live worker answers a ping instantly; the Gemini fetch itself
+// is never put on a timeout (it can legitimately take much longer).
+const WORKER_PING_TIMEOUT_MS = 1500
+
+// AbortControllers for direct (content-script) Gemini fetches, keyed by requestId.
+const directGeminiControllers = new Map()
+
 /**
- * Ask the background worker to abort an in-flight Gemini fetch.
+ * Check the background worker answers a ping. Some browsers (Orion iOS)
+ * suspend the worker and never deliver responses - detect that up front.
+ */
+async function isWorkerAlive() {
+  try {
+    const pong = await Promise.race([
+      browser.runtime.sendMessage({ type: 'quizbank-ping' }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('ping timeout')), WORKER_PING_TIMEOUT_MS)
+      )
+    ])
+    return pong?.ok === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Send the Gemini request through the background worker when it's responsive,
+ * otherwise fetch the backend directly from the page (backend CORS allows it).
+ * Returns the same shape the worker returns: { ok, answer?, aborted?, error? }.
+ */
+async function askGeminiViaWorkerOrDirect(payload, logger) {
+  if (await isWorkerAlive()) {
+    try {
+      const workerResult = await browser.runtime.sendMessage({ type: 'quizbank-gemini-request', ...payload })
+      if (workerResult) return workerResult
+      logger?.warn('Empty worker response - retrying directly')
+    } catch (error) {
+      logger?.warn(`Gemini via worker failed (${error.message}) - retrying directly`)
+    }
+  } else {
+    logger?.warn('Background worker unresponsive - fetching directly')
+  }
+  return fetchGeminiDirect(payload)
+}
+
+/**
+ * Direct content-script fetch to the backend (fallback when the worker is dead).
+ * Mirrors background.js fetchGeminiAnswer, abortable via abortGeminiRequest.
+ */
+async function fetchGeminiDirect({ prompt, deviceId, course, module: moduleName, userNoteIds, requestId }) {
+  const controller = new AbortController()
+  if (requestId) directGeminiControllers.set(requestId, controller)
+
+  try {
+    const response = await fetch(`${QUIZBANK_API_URL}/api/gemini`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, deviceId, course, module: moduleName, userNoteIds })
+    })
+
+    const data = await response.json().catch(() => ({}))
+
+    if (response.status === 499 || data.aborted) {
+      return { ok: false, aborted: true }
+    }
+    if (!response.ok || !data.ok) {
+      return { ok: false, status: response.status, error: data.error }
+    }
+    return { ok: true, answer: data.answer || null, grounding_type: data.grounding_type || 'general_knowledge' }
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      return { ok: false, aborted: true }
+    }
+    return { ok: false, error: String(error) }
+  } finally {
+    if (requestId) directGeminiControllers.delete(requestId)
+  }
+}
+
+/**
+ * Abort an in-flight Gemini fetch - both the worker's and any direct fallback.
  */
 function abortGeminiRequest(requestId) {
   if (!requestId) return
   browser.runtime.sendMessage({ type: 'quizbank-gemini-abort', requestId }).catch(() => { })
+  const controller = directGeminiControllers.get(requestId)
+  if (controller) {
+    controller.abort()
+    directGeminiControllers.delete(requestId)
+  }
 }
 
 // Module-level ref to the active loader so global key/selection handlers can reach it.
