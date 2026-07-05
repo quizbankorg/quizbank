@@ -2220,6 +2220,12 @@ class EnhancedDisplayer {
     const answerText = question.bestAnswer?.text
     if (!answerText) return
 
+    // Clean up any existing AI badges for this question to prevent duplicates on rerun
+    const questionEl = document.getElementById(`question_${questionId}`)
+    if (questionEl) {
+      questionEl.querySelectorAll('.ai-answer-badge').forEach(b => b.remove())
+    }
+
     const normalize = text => text.toLowerCase().replace(/\s+/g, ' ').trim()
     const matches = (a, b) => {
       const left = normalize(a)
