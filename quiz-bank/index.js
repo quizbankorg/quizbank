@@ -125,7 +125,7 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
       logger?.warn('Gemini returned no answer')
       return { status: 'failed' }
     }
-    logger?.info('🤖 Gemini answer:', result.answer)
+    logger?.info(`🤖 Gemini answer [Grounding: ${result.grounding_type || 'general_knowledge'}]:`, result.answer)
     return { status: 'ok', answer: result.answer }
   } catch (error) {
     logger?.warn('Gemini request error:', error)

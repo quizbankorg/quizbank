@@ -92,7 +92,7 @@ async function fetchGeminiAnswer(prompt, deviceId, requestId, course, module) {
     if (!response.ok || !data.ok) {
       return { ok: false, status: response.status, error: data.error }
     }
-    return { ok: true, answer: data.answer || null }
+    return { ok: true, answer: data.answer || null, grounding_type: data.grounding_type || 'general_knowledge' }
   } catch (error) {
     if (error.name === 'AbortError') {
       console.log('[QuizBank BG] gemini fetch aborted')
