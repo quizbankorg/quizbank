@@ -214,56 +214,22 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
 // Backend that relays prompts to Gemini (same one the background worker uses).
 const QUIZBANK_API_URL = 'https://quizbankend-production.up.railway.app'
 
-// A ping slower than this means the worker is dead/suspended (Orion iOS).
-// Kept short: a live worker answers a ping instantly; the Gemini fetch itself
-// is never put on a timeout (it can legitimately take much longer).
-const WORKER_PING_TIMEOUT_MS = 1500
-
 // AbortControllers for direct (content-script) Gemini fetches, keyed by requestId.
 const directGeminiControllers = new Map()
 
 /**
- * Check the background worker answers a ping. Some browsers (Orion iOS)
- * suspend the worker and never deliver responses - detect that up front.
- */
-async function isWorkerAlive() {
-  try {
-    const pong = await Promise.race([
-      browser.runtime.sendMessage({ type: 'quizbank-ping' }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('ping timeout')), WORKER_PING_TIMEOUT_MS)
-      )
-    ])
-    return pong?.ok === true
-  } catch {
-    return false
-  }
-}
-
-/**
- * Send the Gemini request through the background worker when it's responsive,
- * otherwise fetch the backend directly from the page (backend CORS allows it).
- * Returns the same shape the worker returns: { ok, answer?, aborted?, error? }.
+ * Send the Gemini request straight to the backend from the content script.
+ * Returns the same shape the worker returned: { ok, answer?, aborted?, error? }.
  */
 async function askGeminiViaWorkerOrDirect(payload, logger) {
-  debugOverlay('route: pinging worker')
-  if (await isWorkerAlive()) {
-    debugOverlay('route: worker alive - sending via worker')
-    try {
-      const workerResult = await browser.runtime.sendMessage({ type: 'quizbank-gemini-request', ...payload })
-      if (workerResult) return workerResult
-      logger?.warn('Empty worker response - retrying directly')
-      debugOverlay('route: empty worker response - direct fetch')
-    } catch (error) {
-      logger?.warn(`Gemini via worker failed (${error.message}) - retrying directly`)
-      debugOverlay(`route: worker send threw (${error?.message}) - direct fetch`)
-    }
-  } else {
-    logger?.warn('Background worker unresponsive - fetching directly')
-    debugOverlay('route: ping timeout - direct fetch')
-  }
+  // Worker relay abandoned: Orion iOS drops every worker->page response channel
+  // (sync/async sendResponse, promise-return, ports - all probed dead), and
+  // liveness detection proved unreliable. Backend CORS allows page-context
+  // fetches, so the content script always calls the backend directly.
+  debugOverlay('route: direct fetch (worker relay bypassed)')
   const direct = await fetchGeminiDirect(payload)
   debugOverlay(`route: direct fetch done ok=${direct?.ok} err=${direct?.error || '-'}`)
+  if (!direct?.ok && direct?.error) logger?.warn(`Gemini direct fetch failed: ${direct.error}`)
   return direct
 }
 
