@@ -87,15 +87,36 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
   const prompt = buildGeminiPrompt(questionInfo, quizContext)
   logger?.info('🤖 Gemini prompt:', prompt)
 
-  // Read the user's selected AI context (course/module) from the popup. Empty =
-  // general knowledge; the backend injects the matching uploaded material.
+  // Read the user's selected AI context (course/module) and user uploaded files
   let aiContext = { course: '', module: '' }
+  let userContextText = ''
   try {
-    const stored = await browser.storage.local.get(['quizbank_ai_context'])
-    if (stored.quizbank_ai_context) aiContext = stored.quizbank_ai_context
+    const stored = await browser.storage.local.get([
+      'quizbank_ai_context',
+      'quizbank_user_files',
+      'quizbank_selected_user_files'
+    ])
+    if (stored.quizbank_ai_context) {
+      aiContext = stored.quizbank_ai_context
+    }
+    
+    // Read local notes
+    const userFiles = stored.quizbank_user_files || []
+    const selectedIds = stored.quizbank_selected_user_files || []
+    const activeFiles = userFiles.filter(f => selectedIds.includes(f.id))
+    if (activeFiles.length > 0) {
+      userContextText = activeFiles.map(f => `=== FILE: ${f.name} ===\n${f.content}\n=== END FILE ===`).join('\n\n')
+      logger?.info(`📂 Injected context from ${activeFiles.length} user-uploaded local files.`)
+    }
   } catch (e) { /* default to general knowledge */ }
 
   try {
+    // Inject user local uploaded files into the prompt if present
+    let finalPrompt = prompt
+    if (userContextText) {
+      finalPrompt = `Use the following user-uploaded local notes/materials as authoritative context when answering.\n\n${userContextText}\n\n${prompt}`
+    }
+
     // Run the request in the background service worker - isolated from the page's
     // network contention (ClipboardAuto polling etc.) which was stalling it badly.
     // The worker relays the prompt to the backend, which holds the Gemini key
@@ -103,7 +124,7 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
     const startTime = performance.now()
     const result = await browser.runtime.sendMessage({
       type: 'quizbank-gemini-request',
-      prompt,
+      prompt: finalPrompt,
       deviceId,
       course: aiContext.course || null,
       module: aiContext.module || null,
@@ -1286,8 +1307,9 @@ class EnhancedQuizLoader {
             border-radius: 12px;
             padding: 16px;
             font-size: 13px;
-            max-width: 320px;
-                    z-index: 1000;
+            width: 460px;
+            max-width: 90vw;
+            z-index: 1000;
             box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
             backdrop-filter: blur(5px);
         `
@@ -1312,135 +1334,89 @@ class EnhancedQuizLoader {
                    title="Close panel">✕</button>
                                 </div>
 
-            <!-- This Quiz Section -->
-            <div style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #eee;">
-                <h5 style="margin: 0 0 8px 0; color: #2196F3; font-size: 14px; display: flex; align-items: center; gap: 6px;">
-                    🎯 This Quiz
-                </h5>
-                <div class="status-item">
-                    <span class="status-label">Questions Attempted:</span>
-                    <span class="status-value">${canvasStats.totalQuestions}</span>
-                                </div>
-                <div class="status-item">
-                    <span class="status-label">Correct Answers:</span>
-                    <span class="status-value" style="color: #4CAF50;">${canvasStats.correctAnswers}</span>
-                                </div>
-                <div class="status-item">
-                    <span class="status-label">Wrong Answers:</span>
-                    <span class="status-value" style="color: #F44336;">${canvasStats.wrongAnswers}</span>
-                                </div>
-                <div class="status-item">
-                    <span class="status-label">Success Rate:</span>
-                    <span class="status-value">${canvasStats.successRate}%</span>
-                            </div>
-                <button id="export-quiz-btn" style="
-                    width: 100%;
-                    background: linear-gradient(135deg, #2196F3, #1976D2);
-                    color: white;
-                    border: none;
-                    padding: 8px 12px;
-                    border-radius: 6px;
-                    font-size: 11px;
-                    font-weight: bold;
-                    cursor: pointer;
-                    transition: all 0.2s ease;
-                    margin-top: 10px;
-                " onmouseover="this.style.opacity='0.9';" 
-                   onmouseout="this.style.opacity='1';">
-                    📥 Export This Quiz Questions
-                </button>
-                        </div>
-                        
-            <!-- This Course Section -->
-            <div style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #eee;">
-                <h5 style="margin: 0 0 8px 0; color: #4CAF50; font-size: 14px; display: flex; align-items: center; gap: 6px;">
-                    🏦 This Course
-                </h5>
-                <div class="status-item">
-                    <span class="status-label">Known Questions:</span>
-                    <span class="status-value">${kbStats.totalQuestions}</span>
-                                </div>
-                <div class="status-item">
-                    <span class="status-label">High Confidence:</span>
-                    <span class="status-value" style="color: #4CAF50;">${kbStats.highConfidence}</span>
-                                </div>
-                <div class="status-item">
-                    <span class="status-label">Medium Confidence:</span>
-                    <span class="status-value" style="color: #FF9800;">${kbStats.mediumConfidence}</span>
-                                </div>
-                <div class="status-item">
-                    <span class="status-label">Low Confidence:</span>
-                    <span class="status-value" style="color: #F44336;">${kbStats.lowConfidence}</span>
-                                </div>
-                <button id="export-course-btn" style="
-                    width: 100%;
-                    background: linear-gradient(135deg, #4CAF50, #45a049);
-                    color: white;
-                    border: none;
-                    padding: 8px 12px;
-                    border-radius: 6px;
-                    font-size: 11px;
-                    font-weight: bold;
-                    cursor: pointer;
-                    transition: all 0.2s ease;
-                    margin-top: 10px;
-                " onmouseover="this.style.opacity='0.9';" 
-                   onmouseout="this.style.opacity='1';">
-                    📥 Export This Course Questions
-                </button>
-                                </div>
-
-            <!-- AI Source Material Context Section -->
-            <div id="panel-ai-context-section" style="display: ${this.aiMode ? 'block' : 'none'}; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #eee;">
-                <h5 style="margin: 0 0 8px 0; color: #ff9800; font-size: 14px; display: flex; align-items: center; gap: 6px;">
-                    🧠 AI Source Material
-                </h5>
-                <div style="margin-bottom: 8px;">
-                    <select id="panel-ai-context-course" style="
+            <!-- Stats Columns Wrapper (2 Columns) -->
+            <div style="display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 12px;">
+                <!-- This Quiz Section -->
+                <div style="flex: 1; min-width: 200px;">
+                    <h5 style="margin: 0 0 8px 0; color: #2196F3; font-size: 14px; display: flex; align-items: center; gap: 6px;">
+                        🎯 This Quiz
+                    </h5>
+                    <div class="status-item">
+                        <span class="status-label">Questions Attempted:</span>
+                        <span class="status-value">${canvasStats.totalQuestions}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Correct Answers:</span>
+                        <span class="status-value" style="color: #4CAF50;">${canvasStats.correctAnswers}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Wrong Answers:</span>
+                        <span class="status-value" style="color: #F44336;">${canvasStats.wrongAnswers}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Success Rate:</span>
+                        <span class="status-value">${canvasStats.successRate}%</span>
+                    </div>
+                    <button id="export-quiz-btn" style="
                         width: 100%;
-                        padding: 6px;
+                        background: linear-gradient(135deg, #2196F3, #1976D2);
+                        color: white;
+                        border: none;
+                        padding: 8px 12px;
                         border-radius: 6px;
-                        border: 1px solid #ccc;
                         font-size: 11px;
-                        background: white;
-                        color: #333;
+                        font-weight: bold;
                         cursor: pointer;
-                    ">
-                        <option value="">General knowledge (no material)</option>
-                    </select>
+                        transition: all 0.2s ease;
+                        margin-top: 10px;
+                    " onmouseover="this.style.opacity='0.9';" 
+                       onmouseout="this.style.opacity='1';">
+                        📥 Export This Quiz Questions
+                    </button>
                 </div>
-                <div id="panel-ai-context-module-container" style="display: none; margin-bottom: 8px;">
-                    <select id="panel-ai-context-module" style="
+                
+                <!-- This Course Section -->
+                <div style="flex: 1; min-width: 200px;">
+                    <h5 style="margin: 0 0 8px 0; color: #4CAF50; font-size: 14px; display: flex; align-items: center; gap: 6px;">
+                        🏦 This Course
+                    </h5>
+                    <div class="status-item">
+                        <span class="status-label">Known Questions:</span>
+                        <span class="status-value">${kbStats.totalQuestions}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">High Confidence:</span>
+                        <span class="status-value" style="color: #4CAF50;">${kbStats.highConfidence}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Medium Confidence:</span>
+                        <span class="status-value" style="color: #FF9800;">${kbStats.mediumConfidence}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Low Confidence:</span>
+                        <span class="status-value" style="color: #F44336;">${kbStats.lowConfidence}</span>
+                    </div>
+                    <button id="export-course-btn" style="
                         width: 100%;
-                        padding: 6px;
+                        background: linear-gradient(135deg, #4CAF50, #45a049);
+                        color: white;
+                        border: none;
+                        padding: 8px 12px;
                         border-radius: 6px;
-                        border: 1px solid #ccc;
                         font-size: 11px;
-                        background: white;
-                        color: #333;
+                        font-weight: bold;
                         cursor: pointer;
-                    ">
-                        <option value="">Whole course</option>
-                    </select>
-                </div>
-                <div id="panel-ai-context-hint" style="font-size: 10px; color: #666; font-style: italic;">
-                    Loading course materials...
+                        transition: all 0.2s ease;
+                        margin-top: 10px;
+                    " onmouseover="this.style.opacity='0.9';" 
+                       onmouseout="this.style.opacity='1';">
+                        📥 Export This Course Questions
+                    </button>
                 </div>
             </div>
 
-            <!-- QuizBank Vault Section -->
-            <div style="margin-bottom: 12px;">
-                <h5 style="margin: 0 0 8px 0; color: #9C27B0; font-size: 14px; display: flex; align-items: center; gap: 6px;">
-                    🏦 QuizBank Vault
-                </h5>
-                <div class="status-item">
-                    <span class="status-label">Registered Questions:</span>
-                    <span class="status-value">${globalStats.totalQuestions}</span>
-                                </div>
-                                </div>
-
             <!-- Export Filters -->
-            <div style="margin-bottom: 12px; padding: 10px; background: #f8f9fa; border-radius: 8px; border: 1px solid #e0e0e0;">
+            <div style="margin-bottom: 16px; padding: 10px; background: #f8f9fa; border-radius: 8px; border: 1px solid #e0e0e0;">
                 <label style="display: block; font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600;">
                     📚 Export Filter:
                 </label>
@@ -1457,6 +1433,73 @@ class EnhancedQuizLoader {
                         <input type="checkbox" id="filter-new" checked style="cursor: pointer; width: 13px; height: 13px;">
                         <span>✨ New/Partial/Unknown</span>
                     </label>
+                </div>
+            </div>
+
+            <!-- AI Source Material Context Section -->
+            <div id="panel-ai-context-section" style="display: ${this.aiMode ? 'block' : 'none'}; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #eee;">
+                <h5 style="margin: 0 0 8px 0; color: #ff9800; font-size: 14px; display: flex; align-items: center; gap: 6px;">
+                    🧠 AI Source Material
+                </h5>
+                <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                    <div style="flex: 1; min-width: 0;">
+                        <select id="panel-ai-context-course" style="
+                            width: 100%;
+                            padding: 6px;
+                            border-radius: 6px;
+                            border: 1px solid #ccc;
+                            font-size: 11px;
+                            background: white;
+                            color: #333;
+                            cursor: pointer;
+                        ">
+                            <option value="">General knowledge (no material)</option>
+                        </select>
+                    </div>
+                    <div id="panel-ai-context-module-container" style="display: none; flex: 1; min-width: 0;">
+                        <select id="panel-ai-context-module" style="
+                            width: 100%;
+                            padding: 6px;
+                            border-radius: 6px;
+                            border: 1px solid #ccc;
+                            font-size: 11px;
+                            background: white;
+                            color: #333;
+                            cursor: pointer;
+                        ">
+                            <option value="">Add module...</option>
+                        </select>
+                    </div>
+                </div>
+                <!-- Selected Module Badges -->
+                <div id="panel-ai-context-module-badges" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;"></div>
+                <div id="panel-ai-context-hint" style="font-size: 10px; color: #666; font-style: italic;">
+                    Loading course materials...
+                </div>
+
+                <!-- Own Uploads Section -->
+                <div style="border-top: 1px dashed #cbd5e1; padding-top: 10px; margin-top: 10px;">
+                    <h6 style="margin: 0 0 6px 0; color: #475569; font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: space-between;">
+                        <span>📁 Own Uploads (Local Notes)</span>
+                        <label style="cursor: pointer; color: #2196F3; font-weight: bold; font-size: 11px; display: flex; align-items: center; gap: 4px; margin: 0;">
+                            📤 Upload Files
+                            <input type="file" id="panel-own-uploads-input" multiple accept=".txt,.md,.json,.csv" style="display: none;">
+                        </label>
+                    </h6>
+                    <div id="panel-own-uploads-list" style="max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding-right: 4px; margin-top: 6px;">
+                        <!-- Files will be listed here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- QuizBank Vault Section -->
+            <div style="margin-bottom: 16px;">
+                <h5 style="margin: 0 0 8px 0; color: #9C27B0; font-size: 14px; display: flex; align-items: center; gap: 6px;">
+                    🏦 QuizBank Vault
+                </h5>
+                <div class="status-item">
+                    <span class="status-label">Registered Questions:</span>
+                    <span class="status-value">${globalStats.totalQuestions}</span>
                 </div>
             </div>
 
@@ -1537,41 +1580,195 @@ class EnhancedQuizLoader {
       const saved = await browser.storage.local.get(['quizbank_ai_context'])
       const savedContext = saved.quizbank_ai_context || { course: '', module: '' }
 
-      const renderModules = (course, selectedModule = '') => {
-        const entry = catalog.find(item => item.course === course)
-        const modules = entry ? entry.modules : []
-        moduleSelect.innerHTML = '<option value="">Whole course</option>' +
-          modules.map(module => `<option value="${module}">Module ${module}</option>`).join('')
-        moduleSelect.value = selectedModule
-        moduleContainer.style.display = (course && modules.length > 0) ? 'block' : 'none'
-      }
+      const badgesContainer = document.getElementById('panel-ai-context-module-badges')
+      let selectedModules = []
 
-      if (savedContext.course) {
-        courseSelect.value = savedContext.course
-        renderModules(savedContext.course, savedContext.module || '')
-        hint.textContent = 'The AI will use this material as context.'
-      } else {
-        hint.textContent = 'Pick a course to have the AI use your uploaded material.'
+      if (savedContext.module) {
+        selectedModules = savedContext.module.split(',').map(m => m.trim()).filter(Boolean)
       }
 
       const persist = () => {
         browser.storage.local.set({
           quizbank_ai_context: {
             course: courseSelect.value,
-            module: moduleSelect.value
+            module: selectedModules.join(',')
           }
         })
       }
 
+      const renderModuleBadges = (course) => {
+        if (!badgesContainer) return
+        badgesContainer.innerHTML = ''
+
+        selectedModules.forEach(mod => {
+          const badge = document.createElement('span')
+          badge.style.cssText = `
+            background: #f1f5f9;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 10px;
+            color: #475569;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            user-select: none;
+          `
+          badge.innerHTML = `
+            Module ${mod}
+            <span class="remove-module" data-module="${mod}" style="cursor: pointer; font-weight: bold; color: #94a3b8; line-height: 1;">✕</span>
+          `
+
+          badge.querySelector('.remove-module').addEventListener('click', (e) => {
+            const modToRemove = e.target.getAttribute('data-module')
+            selectedModules = selectedModules.filter(m => m !== modToRemove)
+            renderModuleBadges(course)
+            renderModuleDropdown(course)
+            persist()
+          })
+
+          badgesContainer.appendChild(badge)
+        })
+      }
+
+      const renderModuleDropdown = (course) => {
+        const entry = catalog.find(item => item.course === course)
+        const allModules = entry ? entry.modules : []
+        const availableModules = allModules.filter(m => !selectedModules.includes(m))
+
+        moduleSelect.innerHTML = '<option value="">Add module...</option>' +
+          availableModules.map(module => `<option value="${module}">Module ${module}</option>`).join('')
+
+        moduleSelect.value = ''
+        moduleContainer.style.display = (course && allModules.length > 0) ? 'block' : 'none'
+      }
+
+      if (savedContext.course) {
+        courseSelect.value = savedContext.course
+        renderModuleDropdown(savedContext.course)
+        renderModuleBadges(savedContext.course)
+        hint.textContent = 'The AI will use this material as context.'
+      } else {
+        hint.textContent = 'Pick a course to have the AI use your uploaded material.'
+      }
+
       courseSelect.addEventListener('change', () => {
-        renderModules(courseSelect.value, '')
+        selectedModules = []
+        renderModuleDropdown(courseSelect.value)
+        renderModuleBadges(courseSelect.value)
         hint.textContent = courseSelect.value
           ? 'The AI will use this material as context.'
           : 'Pick a course to have the AI use your uploaded material.'
         persist()
       })
 
-      moduleSelect.addEventListener('change', persist)
+      moduleSelect.addEventListener('change', () => {
+        const chosen = moduleSelect.value
+        if (chosen) {
+          if (!selectedModules.includes(chosen)) {
+            selectedModules.push(chosen)
+            selectedModules.sort()
+          }
+          renderModuleDropdown(courseSelect.value)
+          renderModuleBadges(courseSelect.value)
+          persist()
+        }
+      })
+
+      // --- Local Notes Own Uploads Logic ---
+      const fileInput = document.getElementById('panel-own-uploads-input')
+      const uploadsList = document.getElementById('panel-own-uploads-list')
+
+      const loadOwnUploads = async () => {
+        if (!uploadsList) return
+        const storedNow = await browser.storage.local.get(['quizbank_user_files', 'quizbank_selected_user_files'])
+        const files = storedNow.quizbank_user_files || []
+        const selectedIds = storedNow.quizbank_selected_user_files || []
+
+        if (files.length === 0) {
+          uploadsList.innerHTML = '<div style="font-size: 10px; color: #94a3b8; font-style: italic; text-align: center; padding: 6px 0;">No local notes uploaded yet.</div>'
+          return
+        }
+
+        uploadsList.innerHTML = files.map(file => {
+          const isChecked = selectedIds.includes(file.id) ? 'checked' : ''
+          return `
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 6px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; font-size: 11px; margin-bottom: 2px;">
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; flex: 1; min-width: 0; margin: 0; font-weight: normal; color: #334155;">
+                <input type="checkbox" class="own-upload-checkbox" data-id="${file.id}" ${isChecked} style="cursor: pointer; width: 13px; height: 13px; margin: 0;">
+                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;" title="${file.name}">${file.name}</span>
+              </label>
+              <span class="delete-own-upload" data-id="${file.id}" style="cursor: pointer; font-size: 12px; color: #94a3b8; transition: color 0.2s;" onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='#94a3b8'">🗑️</span>
+            </div>
+          `
+        }).join('')
+
+        // Add change listeners to checkboxes
+        uploadsList.querySelectorAll('.own-upload-checkbox').forEach(cb => {
+          cb.addEventListener('change', async () => {
+            const currentSelected = Array.from(uploadsList.querySelectorAll('.own-upload-checkbox:checked'))
+              .map(el => el.getAttribute('data-id'))
+            await browser.storage.local.set({ quizbank_selected_user_files: currentSelected })
+          })
+        })
+
+        // Add click listeners to delete buttons
+        uploadsList.querySelectorAll('.delete-own-upload').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const id = btn.getAttribute('data-id')
+            const storedDelete = await browser.storage.local.get(['quizbank_user_files', 'quizbank_selected_user_files'])
+            const updatedFiles = (storedDelete.quizbank_user_files || []).filter(f => f.id !== id)
+            const updatedSelected = (storedDelete.quizbank_selected_user_files || []).filter(sid => sid !== id)
+            await browser.storage.local.set({
+              quizbank_user_files: updatedFiles,
+              quizbank_selected_user_files: updatedSelected
+            })
+            loadOwnUploads()
+          })
+        })
+      }
+
+      if (fileInput) {
+        fileInput.addEventListener('change', async (e) => {
+          const files = Array.from(e.target.files)
+          if (files.length === 0) return
+
+          const storedUpload = await browser.storage.local.get(['quizbank_user_files', 'quizbank_selected_user_files'])
+          const existingFiles = storedUpload.quizbank_user_files || []
+          const existingSelected = storedUpload.quizbank_selected_user_files || []
+
+          for (const file of files) {
+            const content = await new Promise((resolve) => {
+              const reader = new FileReader()
+              reader.onload = (evt) => resolve(evt.target.result)
+              reader.onerror = () => resolve('')
+              reader.readAsText(file)
+            })
+
+            if (content.trim()) {
+              const newFile = {
+                id: 'file_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+                name: file.name,
+                content: content,
+                size: file.size,
+                uploadedAt: Date.now()
+              }
+              existingFiles.push(newFile)
+              existingSelected.push(newFile.id)
+            }
+          }
+
+          await browser.storage.local.set({
+            quizbank_user_files: existingFiles,
+            quizbank_selected_user_files: existingSelected
+          })
+
+          fileInput.value = ''
+          loadOwnUploads()
+        })
+      }
+
+      loadOwnUploads()
     })()
 
     // Get course name for exports

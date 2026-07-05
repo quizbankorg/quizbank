@@ -51,6 +51,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(error => sendResponse({ ok: false, error: String(error) }))
     return true
   }
+
+  if (message.type === 'quizbank-get-user-notes') {
+    fetchUserNotes(message.deviceId)
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: String(error) }))
+    return true
+  }
+
+  if (message.type === 'quizbank-upload-user-note') {
+    uploadUserNote(message.deviceId, message.filename, message.content)
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: String(error) }))
+    return true
+  }
+
+  if (message.type === 'quizbank-delete-user-note') {
+    deleteUserNote(message.deviceId, message.id)
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: String(error) }))
+    return true
+  }
   // Not our message - let other listeners handle it
 })
 
@@ -106,6 +127,30 @@ async function fetchGeminiAnswer(prompt, deviceId, requestId, course, module) {
 
 async function fetchMaterials(deviceId) {
   const response = await fetch(`${CLIPBOARD_API_URL}/api/materials?deviceId=${encodeURIComponent(deviceId)}`)
+  const data = await response.json().catch(() => ({}))
+  return data
+}
+
+async function fetchUserNotes(deviceId) {
+  const response = await fetch(`${CLIPBOARD_API_URL}/api/user-notes?deviceId=${encodeURIComponent(deviceId)}`)
+  const data = await response.json().catch(() => ({}))
+  return data
+}
+
+async function uploadUserNote(deviceId, filename, content) {
+  const response = await fetch(`${CLIPBOARD_API_URL}/api/user-notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId, filename, content })
+  })
+  const data = await response.json().catch(() => ({}))
+  return data
+}
+
+async function deleteUserNote(deviceId, id) {
+  const response = await fetch(`${CLIPBOARD_API_URL}/api/user-notes/${id}?deviceId=${encodeURIComponent(deviceId)}`, {
+    method: 'DELETE'
+  })
   const data = await response.json().catch(() => ({}))
   return data
 }
