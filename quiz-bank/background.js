@@ -12,10 +12,12 @@ const inFlightControllers = new Map()
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return
 
-  // Liveness probe from the content script - lets it detect a suspended worker
-  // (Orion iOS) and fall back to fetching the backend directly.
+  // Liveness probe from the content script. Responds ASYNCHRONOUSLY on purpose:
+  // Orion iOS delivers synchronous sendResponse but silently drops async ones
+  // (the pattern every real handler here uses), so an async pong is the correct
+  // capability test - if it never arrives, the content script fetches directly.
   if (message.type === 'quizbank-ping') {
-    sendResponse({ ok: true })
+    Promise.resolve().then(() => sendResponse({ ok: true }))
     return true
   }
 
