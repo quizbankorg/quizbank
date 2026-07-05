@@ -90,19 +90,27 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
   // Read the user's selected AI context (course/module) and Supabase-synced note selection
   let aiContext = { course: '', module: '' }
   let selectedNoteIds = []
+  let selectedNoteNames = []
   try {
     const stored = await browser.storage.local.get([
       'quizbank_ai_context',
+      'quizbank_user_notes',
       'quizbank_selected_user_files'
     ])
     if (stored.quizbank_ai_context) {
       aiContext = stored.quizbank_ai_context
     }
-    if (Array.isArray(stored.quizbank_selected_user_files)) {
-      selectedNoteIds = stored.quizbank_selected_user_files
-    }
-    if (selectedNoteIds.length > 0) {
-      logger?.info(`📂 Grounding prompt with ${selectedNoteIds.length} Supabase-synced user notes.`)
+    const allNotes = stored.quizbank_user_notes || []
+    const rawSelectedIds = (stored.quizbank_selected_user_files || []).map(Number)
+
+    // Filter to only include IDs that exist in the active user notes list
+    selectedNoteIds = rawSelectedIds.filter(id => allNotes.some(n => Number(n.id) === id))
+    selectedNoteNames = allNotes
+      .filter(n => selectedNoteIds.includes(Number(n.id)))
+      .map(n => n.filename)
+
+    if (selectedNoteNames.length > 0) {
+      logger?.info(`📂 Grounding prompt with selected notes: ${selectedNoteNames.join(', ')}`)
     }
   } catch (e) { /* default to empty */ }
 
@@ -1684,6 +1692,7 @@ class EnhancedQuizLoader {
           })
 
           const files = (response && response.ok && Array.isArray(response.notes)) ? response.notes : []
+          await browser.storage.local.set({ quizbank_user_notes: files })
           const stored = await browser.storage.local.get(['quizbank_selected_user_files'])
           const selectedIds = (stored.quizbank_selected_user_files || []).map(Number)
 
