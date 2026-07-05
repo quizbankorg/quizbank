@@ -178,6 +178,21 @@ function attachAIGlobalListeners() {
     currentLoader?.handleRightClick(event)
   })
 
+  // Mobile: double-tap mirrors right-click (no contextmenu on most touch browsers).
+  let lastTapTime = 0
+  let lastTapTarget = null
+  document.addEventListener('touchend', (event) => {
+    const now = Date.now()
+    const target = event.target
+    const isDoubleTap =
+      now - lastTapTime < 350 && lastTapTarget === target
+    lastTapTime = now
+    lastTapTarget = target
+    if (isDoubleTap) {
+      currentLoader?.handleDoubleTap(event)
+    }
+  })
+
   window.addEventListener('beforeunload', () => {
     currentLoader?.abortAllAIRequests()
   })
@@ -901,6 +916,31 @@ class EnhancedQuizLoader {
     event.preventDefault()
     const questionId = container.id?.replace('question_', '')
     if (questionId && this.aiRegistry.has(questionId)) {
+      this.triggerAI(questionId)
+    }
+  }
+
+  /**
+   * Mobile double-tap: same targeting as right-click.
+   * One question per page -> double-tap anywhere; multiple -> on the question block.
+   * preventDefault only when triggering, so normal taps (inputs, links) still work.
+   */
+  handleDoubleTap(event) {
+    if (this.getQuestionIds().length <= 1) {
+      const onlyId = [...this.aiRegistry.keys()][0]
+      if (onlyId) {
+        event.preventDefault() // suppress double-tap zoom / synthesized click
+        this.triggerAI(onlyId)
+      }
+      return
+    }
+
+    const container = event.target?.closest?.('.display_question, .question')
+    if (!container) return
+
+    const questionId = container.id?.replace('question_', '')
+    if (questionId && this.aiRegistry.has(questionId)) {
+      event.preventDefault()
       this.triggerAI(questionId)
     }
   }
