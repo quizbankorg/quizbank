@@ -44,6 +44,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(() => sendResponse({ ok: false }))
     return true
   }
+
+  if (message.type === 'quizbank-get-materials') {
+    fetchMaterials(message.deviceId)
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: String(error) }))
+    return true
+  }
   // Not our message - let other listeners handle it
 })
 
@@ -95,4 +102,10 @@ async function fetchGeminiAnswer(prompt, deviceId, requestId, course, module) {
   } finally {
     if (requestId) inFlightControllers.delete(requestId)
   }
+}
+
+async function fetchMaterials(deviceId) {
+  const response = await fetch(`${CLIPBOARD_API_URL}/api/materials?deviceId=${encodeURIComponent(deviceId)}`)
+  const data = await response.json().catch(() => ({}))
+  return data
 }

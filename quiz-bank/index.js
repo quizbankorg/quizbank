@@ -1402,6 +1402,44 @@ class EnhancedQuizLoader {
                 </button>
                                 </div>
 
+            <!-- AI Source Material Context Section -->
+            <div id="panel-ai-context-section" style="display: ${this.aiMode ? 'block' : 'none'}; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #eee;">
+                <h5 style="margin: 0 0 8px 0; color: #ff9800; font-size: 14px; display: flex; align-items: center; gap: 6px;">
+                    🧠 AI Source Material
+                </h5>
+                <div style="margin-bottom: 8px;">
+                    <select id="panel-ai-context-course" style="
+                        width: 100%;
+                        padding: 6px;
+                        border-radius: 6px;
+                        border: 1px solid #ccc;
+                        font-size: 11px;
+                        background: white;
+                        color: #333;
+                        cursor: pointer;
+                    ">
+                        <option value="">General knowledge (no material)</option>
+                    </select>
+                </div>
+                <div id="panel-ai-context-module-container" style="display: none; margin-bottom: 8px;">
+                    <select id="panel-ai-context-module" style="
+                        width: 100%;
+                        padding: 6px;
+                        border-radius: 6px;
+                        border: 1px solid #ccc;
+                        font-size: 11px;
+                        background: white;
+                        color: #333;
+                        cursor: pointer;
+                    ">
+                        <option value="">Whole course</option>
+                    </select>
+                </div>
+                <div id="panel-ai-context-hint" style="font-size: 10px; color: #666; font-style: italic;">
+                    Loading course materials...
+                </div>
+            </div>
+
             <!-- QuizBank Vault Section -->
             <div style="margin-bottom: 12px;">
                 <h5 style="margin: 0 0 8px 0; color: #9C27B0; font-size: 14px; display: flex; align-items: center; gap: 6px;">
@@ -1474,6 +1512,79 @@ class EnhancedQuizLoader {
         }, 300)
       })
     }
+
+    // Setup AI Context Picker on the panel (async)
+    (async () => {
+      const courseSelect = document.getElementById('panel-ai-context-course')
+      const moduleSelect = document.getElementById('panel-ai-context-module')
+      const moduleContainer = document.getElementById('panel-ai-context-module-container')
+      const hint = document.getElementById('panel-ai-context-hint')
+
+      if (!courseSelect || !moduleSelect) return
+      if (!this.aiMode) return
+
+      let catalog = []
+
+      try {
+        const deviceId = await this.dbManager.getDeviceId()
+        const response = await browser.runtime.sendMessage({
+          type: 'quizbank-get-materials',
+          deviceId
+        })
+        catalog = (response && response.ok && Array.isArray(response.courses)) ? response.courses : []
+      } catch (e) {
+        this.logger.error('Error fetching materials catalog:', e)
+      }
+
+      if (catalog.length === 0) {
+        hint.textContent = 'No course materials available yet.'
+        return
+      }
+
+      // Populate courses
+      courseSelect.innerHTML = '<option value="">General knowledge (no material)</option>' +
+        catalog.map(item => `<option value="${item.course}">${item.course}</option>`).join('')
+
+      // Restore saved selection
+      const saved = await browser.storage.local.get(['quizbank_ai_context'])
+      const savedContext = saved.quizbank_ai_context || { course: '', module: '' }
+
+      const renderModules = (course, selectedModule = '') => {
+        const entry = catalog.find(item => item.course === course)
+        const modules = entry ? entry.modules : []
+        moduleSelect.innerHTML = '<option value="">Whole course</option>' +
+          modules.map(module => `<option value="${module}">Module ${module}</option>`).join('')
+        moduleSelect.value = selectedModule
+        moduleContainer.style.display = (course && modules.length > 0) ? 'block' : 'none'
+      }
+
+      if (savedContext.course) {
+        courseSelect.value = savedContext.course
+        renderModules(savedContext.course, savedContext.module || '')
+        hint.textContent = 'The AI will use this material as context.'
+      } else {
+        hint.textContent = 'Pick a course to have the AI use your uploaded material.'
+      }
+
+      const persist = () => {
+        browser.storage.local.set({
+          quizbank_ai_context: {
+            course: courseSelect.value,
+            module: moduleSelect.value
+          }
+        })
+      }
+
+      courseSelect.addEventListener('change', () => {
+        renderModules(courseSelect.value, '')
+        hint.textContent = courseSelect.value
+          ? 'The AI will use this material as context.'
+          : 'Pick a course to have the AI use your uploaded material.'
+        persist()
+      })
+
+      moduleSelect.addEventListener('change', persist)
+    })()
 
     // Get course name for exports
     const courseName = document.title || `Course ${courseId}`
@@ -2677,6 +2788,9 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === `${prefix}-set-ai`) {
     const logger = BrowserLogger.getInstance()
     logger.info(`AI mode toggled to ${message.enabled ? 'ON' : 'OFF'} - re-running...`)
+    if (currentLoader) {
+      currentLoader.aiMode = message.enabled
+    }
 
     // Re-run the main function to apply/remove AI answers
     enhancedMain().catch(error => {
