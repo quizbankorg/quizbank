@@ -1471,10 +1471,10 @@ class EnhancedQuizLoader {
                 <!-- Own Uploads Section -->
                 <div style="border-top: 1px dashed #cbd5e1; padding-top: 10px; margin-top: 10px;">
                     <h6 style="margin: 0 0 6px 0; color: #475569; font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: space-between;">
-                        <span>📁 Own Uploads (Local Notes)</span>
+                        <span>📁 Own Uploads (PDF Notes)</span>
                         <label style="cursor: pointer; color: #2196F3; font-weight: bold; font-size: 11px; display: flex; align-items: center; gap: 4px; margin: 0;">
-                            📤 Upload Files
-                            <input type="file" id="panel-own-uploads-input" multiple accept=".txt,.md,.json,.csv" style="display: none;">
+                            📤 Upload PDF
+                            <input type="file" id="panel-own-uploads-input" multiple accept=".pdf" style="display: none;">
                         </label>
                     </h6>
                     <div id="panel-own-uploads-list" style="max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding-right: 4px; margin-top: 6px;">
@@ -1755,19 +1755,24 @@ class EnhancedQuizLoader {
             const existingSelected = storedUpload.quizbank_selected_user_files || []
 
             for (const file of files) {
-              const content = await new Promise((resolve) => {
+              const base64Data = await new Promise((resolve) => {
                 const reader = new FileReader()
-                reader.onload = (evt) => resolve(evt.target.result)
+                reader.onload = (evt) => {
+                  const result = evt.target.result
+                  const base64 = result.split(',')[1]
+                  resolve(base64)
+                }
                 reader.onerror = () => resolve('')
-                reader.readAsText(file)
+                reader.readAsDataURL(file)
               })
 
-              if (content.trim()) {
+              if (base64Data) {
                 const upResponse = await browser.runtime.sendMessage({
                   type: 'quizbank-upload-user-note',
                   deviceId,
                   filename: file.name,
-                  content
+                  content: base64Data,
+                  mimeType: file.type
                 })
 
                 if (upResponse && upResponse.ok && upResponse.note) {

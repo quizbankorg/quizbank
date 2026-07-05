@@ -60,7 +60,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'quizbank-upload-user-note') {
-    uploadUserNote(message.deviceId, message.filename, message.content)
+    uploadUserNote(message.deviceId, message.filename, message.content, message.mimeType)
       .then(sendResponse)
       .catch(error => sendResponse({ ok: false, error: String(error) }))
     return true
@@ -143,14 +143,30 @@ async function fetchUserNotes(deviceId) {
   return data
 }
 
-async function uploadUserNote(deviceId, filename, content) {
-  const response = await fetch(`${CLIPBOARD_API_URL}/api/user-notes`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ deviceId, filename, content })
-  })
-  const data = await response.json().catch(() => ({}))
-  return data
+async function uploadUserNote(deviceId, filename, base64Data, mimeType) {
+  try {
+    const byteCharacters = atob(base64Data)
+    const byteNumbers = new Array(byteCharacters.length)
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i)
+    }
+    const byteArray = new Uint8Array(byteNumbers)
+    const fileBlob = new Blob([byteArray], { type: mimeType })
+
+    const formData = new FormData()
+    formData.append('deviceId', deviceId)
+    formData.append('file', fileBlob, filename)
+
+    const response = await fetch(`${CLIPBOARD_API_URL}/api/user-notes`, {
+      method: 'POST',
+      body: formData
+    })
+    const data = await response.json().catch(() => ({}))
+    return data
+  } catch (error) {
+    console.error('[QuizBank BG] Error uploading user note:', error)
+    return { ok: false, error: String(error) }
+  }
 }
 
 async function deleteUserNote(deviceId, id) {
