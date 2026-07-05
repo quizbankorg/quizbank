@@ -2226,28 +2226,35 @@ class EnhancedDisplayer {
       questionEl.querySelectorAll('.ai-answer-badge').forEach(b => b.remove())
     }
 
-    const normalize = text => text.toLowerCase().replace(/\s+/g, ' ').trim()
-    const matches = (a, b) => {
-      const left = normalize(a)
-      const right = normalize(b)
-      return left.includes(right) || right.includes(left)
+    const labels = document.querySelectorAll(`#question_${questionId} .answer_label`)
+    if (labels.length === 0 && questionType !== QuestionTypes.ESSAY_QUESTION && questionType !== 'default') return
+
+    const findMatchingLabels = (targetText) => {
+      const normalize = text => text.toLowerCase().replace(/\s+/g, ' ').trim()
+      const labelTexts = Array.from(labels).map(l => ({ label: l, text: normalize(l.textContent) }))
+      const normalizedTarget = normalize(targetText)
+
+      const exact = labelTexts.filter(item => item.text === normalizedTarget)
+      if (exact.length > 0) {
+        return exact.map(item => item.label)
+      }
+
+      return labelTexts
+        .filter(item => item.text.includes(normalizedTarget) || normalizedTarget.includes(item.text))
+        .map(item => item.label)
     }
 
     switch (questionType) {
       case QuestionTypes.MULTIPLE_CHOICE:
       case QuestionTypes.TRUE_FALSE: {
-        const labels = document.querySelectorAll(`#question_${questionId} .answer_label`)
-        for (const label of labels) {
-          if (matches(label.textContent, answerText)) {
-            // Stealth: fade the divider above the choice; otherwise show the AI badge.
-            if (this.stealthMode) {
-              this.applyStealthDividerFade(label)
-            } else {
-              this.highlightAIAnswerWithBadge(label)
-            }
+        const matchedLabels = findMatchingLabels(answerText)
+        for (const label of matchedLabels) {
+          if (this.stealthMode) {
+            this.applyStealthDividerFade(label)
+          } else {
+            this.highlightAIAnswerWithBadge(label)
           }
         }
-        // Also flag any previously-wrong answers carried from history (skip in stealth)
         if (!this.stealthMode) {
           this.highlightAllWrongAnswers(question, questionId)
         }
@@ -2256,14 +2263,15 @@ class EnhancedDisplayer {
 
       case QuestionTypes.MULTIPLE_ANSWER: {
         const aiAnswers = answerText.split(/\s*\|\s*|,/).map(a => a.trim()).filter(Boolean)
-        const labels = document.querySelectorAll(`#question_${questionId} .answer_label`)
-        for (const label of labels) {
-          if (aiAnswers.some(aiAnswer => matches(label.textContent, aiAnswer))) {
-            if (this.stealthMode) {
-              this.applyStealthDividerFade(label)
-            } else {
-              this.highlightAIAnswerWithBadge(label)
-            }
+        const matchedLabels = new Set()
+        for (const aiAnswer of aiAnswers) {
+          findMatchingLabels(aiAnswer).forEach(l => matchedLabels.add(l))
+        }
+        for (const label of matchedLabels) {
+          if (this.stealthMode) {
+            this.applyStealthDividerFade(label)
+          } else {
+            this.highlightAIAnswerWithBadge(label)
           }
         }
         if (!this.stealthMode) {
