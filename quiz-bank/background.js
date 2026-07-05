@@ -17,7 +17,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // (the pattern every real handler here uses), so an async pong is the correct
   // capability test - if it never arrives, the content script fetches directly.
   if (message.type === 'quizbank-ping') {
-    Promise.resolve().then(() => sendResponse({ ok: true }))
+    setTimeout(() => sendResponse({ ok: true }), 250)
     return true
   }
 
