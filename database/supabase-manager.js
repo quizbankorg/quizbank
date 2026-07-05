@@ -615,6 +615,18 @@ class SupabaseQuizManager {
     }
 
     /**
+     * Get global registered question count (secure - requires valid voucher access, fast fallback to avoid full table scan payload)
+     */
+    async getGlobalQuestionCount() {
+        await this.init();
+        const deviceId = await this.getDeviceId();
+
+        return await this.safeRpcCall('qb_get_global_question_count', {
+            p_device_id: deviceId
+        });
+    }
+
+    /**
      * Get questions by quiz ID (secure - requires valid voucher access)
      */
     async getQuestionsByQuizId(courseId, quizId) {

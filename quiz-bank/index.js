@@ -1227,8 +1227,8 @@ class EnhancedQuizLoader {
         courseId
       )
 
-      // Get Global Knowledge Bank data (all courses)
-      const globalKnowledgeBase = await this.dbManager.getGlobalKnowledgeBase()
+      // Get Global Knowledge Bank question count (fast)
+      const globalQuestionCount = await this.dbManager.getGlobalQuestionCount()
 
       // Filter for questions that might be related to this quiz (or show all course knowledge)
       const knowledgeBankData = courseKnowledgeBase.map(item => ({
@@ -1241,25 +1241,13 @@ class EnhancedQuizLoader {
         answer_text: item.bestAnswer ? item.bestAnswer.answer_text : null
       }))
 
-      // Transform global knowledge bank data
-      const globalKnowledgeBankData = globalKnowledgeBase.map(item => ({
-        question_hash: item.question.question_hash,
-        question_text: item.question.question_text,
-        question_type: item.question.question_type,
-        course_id: item.question.course_id,
-        confidence_score: item.bestAnswer
-          ? item.bestAnswer.confidence_score
-          : 0,
-        answer_text: item.bestAnswer ? item.bestAnswer.answer_text : null
-      }))
-
       // Create preview panel
       this.createPreviewPanel(
         courseId,
         quizId,
         canvasAnswers,
         knowledgeBankData,
-        globalKnowledgeBankData
+        globalQuestionCount
       )
     } catch (error) {
       this.logger.error('Error showing preview panel:', error)
@@ -1273,7 +1261,7 @@ class EnhancedQuizLoader {
   /**
    * Create and display the preview panel
    */
-  createPreviewPanel(courseId, quizId, canvasAnswers, knowledgeBankData, globalKnowledgeBankData = []) {
+  createPreviewPanel(courseId, quizId, canvasAnswers, knowledgeBankData, globalQuestionCount = 0) {
     // Remove existing panel if any
     const existingPanel = document.getElementById('quiz-preview-panel')
     if (existingPanel) {
@@ -1283,7 +1271,7 @@ class EnhancedQuizLoader {
     // Calculate stats
     const canvasStats = this.calculateCanvasStats(canvasAnswers)
     const kbStats = this.calculateKnowledgeBankStats(knowledgeBankData)
-    const globalStats = this.calculateGlobalKnowledgeBankStats(globalKnowledgeBankData)
+    const globalStats = { totalQuestions: typeof globalQuestionCount === 'number' ? globalQuestionCount : 0 }
 
     // Create panel element
     const panel = document.createElement('div')
