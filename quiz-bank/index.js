@@ -41,6 +41,20 @@ const AUTO_SELECT_DELAY_MAX_MS = 20_000
 const AUTO_NAVIGATION_DELAY_MS = 500
 let autoSelectionGeneration = 0
 
+function scrollQuestionIntoView(questionId) {
+  if (!questionId || typeof document === 'undefined') return
+
+  const questionElement = document.getElementById(`question_${questionId}`)
+  const scrollTarget = questionElement?.querySelector('.header') || questionElement
+  if (!scrollTarget || typeof scrollTarget.getBoundingClientRect !== 'function') return
+
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+  const { top, bottom } = scrollTarget.getBoundingClientRect()
+  if (top < 0 || bottom > viewportHeight) {
+    scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+  }
+}
+
 function mountAutoSelectionCountdown(questionId, delayMs, stealthMode) {
   if (stealthMode || !questionId || typeof document === 'undefined') return null
 
@@ -85,6 +99,7 @@ function createAutoSelectionDelay(logger, questionId = null, stealthMode = false
     Math.random() * (AUTO_SELECT_DELAY_MAX_MS - AUTO_SELECT_DELAY_MIN_MS + 1)
   )
   logger?.info(`Auto-select delay: ${Math.round(delayMs / 1000)} seconds`)
+  scrollQuestionIntoView(questionId)
   const removeCountdown = mountAutoSelectionCountdown(questionId, delayMs, stealthMode)
   return new Promise(resolve => setTimeout(() => {
     removeCountdown?.()
