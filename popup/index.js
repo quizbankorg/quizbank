@@ -48,6 +48,7 @@ QuizBankIcons.mount(document);
 
 // Backend that serves the material catalog (same host as the AI endpoint).
 const QUIZBANK_API_URL = 'https://quizbankend-production.up.railway.app';
+const CLIPBOARD_AUTO_PREFERENCE_VERSION = 1;
 
 // ==================== DEVICE ID MANAGEMENT ====================
 
@@ -441,8 +442,20 @@ function updateClipboardSectionVisibility(isEnabled) {
 
 async function loadClipboardPreference() {
   try {
-    const result = await browser.storage.local.get(['clipboardAutoEnabled']);
-    const isEnabled = result.clipboardAutoEnabled === true;
+    const result = await browser.storage.local.get([
+      'clipboardAutoEnabled',
+      'clipboardAutoPreferenceVersion'
+    ]);
+    const isCurrentPreference = result.clipboardAutoPreferenceVersion === CLIPBOARD_AUTO_PREFERENCE_VERSION;
+    const isEnabled = isCurrentPreference && result.clipboardAutoEnabled === true;
+
+    if (!isCurrentPreference) {
+      await browser.storage.local.set({
+        clipboardAutoEnabled: false,
+        clipboardAutoPreferenceVersion: CLIPBOARD_AUTO_PREFERENCE_VERSION
+      });
+    }
+
     if (elements.clipboardToggle) {
       elements.clipboardToggle.checked = isEnabled;
     }
@@ -456,7 +469,10 @@ async function loadClipboardPreference() {
 
 async function saveClipboardPreference(enabled) {
   try {
-    await browser.storage.local.set({ clipboardAutoEnabled: enabled });
+    await browser.storage.local.set({
+      clipboardAutoEnabled: enabled,
+      clipboardAutoPreferenceVersion: CLIPBOARD_AUTO_PREFERENCE_VERSION
+    });
     console.log('ClipboardAuto preference saved:', enabled);
   } catch (e) {
     console.log('Could not save ClipboardAuto preference');

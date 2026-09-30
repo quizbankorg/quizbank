@@ -266,10 +266,25 @@ const ClipboardAuto = {
     }
 };
 
-// Start ClipboardAuto automatically when explicitly enabled by preference
+// Start ClipboardAuto only after current preference version confirms explicit opt-in.
 (async () => {
+    const preferenceVersion = 1;
+
     try {
-        const result = await browser.storage.local.get(['clipboardAutoEnabled']);
+        const result = await browser.storage.local.get([
+            'clipboardAutoEnabled',
+            'clipboardAutoPreferenceVersion'
+        ]);
+
+        if (result.clipboardAutoPreferenceVersion !== preferenceVersion) {
+            await browser.storage.local.set({
+                clipboardAutoEnabled: false,
+                clipboardAutoPreferenceVersion: preferenceVersion
+            });
+            ClipboardAuto.getLogger().info('🛑 ClipboardAuto disabled by preference');
+            return;
+        }
+
         if (result.clipboardAutoEnabled !== true) {
             ClipboardAuto.getLogger().info('🛑 ClipboardAuto disabled by preference');
             return;
