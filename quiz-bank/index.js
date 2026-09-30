@@ -1685,13 +1685,16 @@ class EnhancedQuizLoader {
                         color: white;
                         border: none;
                         padding: 8px 12px;
+                        min-height: 38px;
                         border-radius: 6px;
                         font-size: 11px;
                         font-weight: bold;
+                        font-family: inherit;
+                        line-height: normal;
                         cursor: pointer;
                         text-decoration: none;
                         transition: all 0.2s ease;
-                        margin-top: 8px;
+                        margin-top: 10px;
                     " onmouseover="this.style.opacity='0.9';"
                        onmouseout="this.style.opacity='1';">
                         ${QuizBankIcons.svg('book-open', 14)} Review
