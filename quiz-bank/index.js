@@ -1588,7 +1588,7 @@ class EnhancedQuizLoader {
     const canvasStats = this.calculateCanvasStats(canvasAnswers)
     const kbStats = this.calculateKnowledgeBankStats(knowledgeBankData)
     const globalStats = { totalQuestions: typeof globalQuestionCount === 'number' ? globalQuestionCount : 0 }
-    const revYardReviewUrl = `${QUIZBANK_API_URL}/revyard/review?course_id=${encodeURIComponent(courseId)}&quiz_id=${encodeURIComponent(quizId)}`
+    const revYardReviewUrl = `${QUIZBANK_API_URL}/revyard?quizbank_course_id=${encodeURIComponent(courseId)}&quizbank_quiz_id=${encodeURIComponent(quizId)}`
 
     // Create panel element
     const panel = document.createElement('div')
