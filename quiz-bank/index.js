@@ -1697,7 +1697,7 @@ class EnhancedQuizLoader {
                         margin-top: 10px;
                     " onmouseover="this.style.opacity='0.9';"
                        onmouseout="this.style.opacity='1';">
-                        ${QuizBankIcons.svg('book-open', 14)} Quiz-Type Review
+                        ${QuizBankIcons.svg('book-open', 14)} QuizBank Review
                     </a>
                 </div>
                 
