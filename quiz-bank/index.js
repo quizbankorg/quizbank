@@ -1588,6 +1588,7 @@ class EnhancedQuizLoader {
     const canvasStats = this.calculateCanvasStats(canvasAnswers)
     const kbStats = this.calculateKnowledgeBankStats(knowledgeBankData)
     const globalStats = { totalQuestions: typeof globalQuestionCount === 'number' ? globalQuestionCount : 0 }
+    const revYardReviewUrl = `${QUIZBANK_API_URL}/revyard/review?course_id=${encodeURIComponent(courseId)}&quiz_id=${encodeURIComponent(quizId)}`
 
     // Create panel element
     const panel = document.createElement('div')
@@ -1669,10 +1670,32 @@ class EnhancedQuizLoader {
                         cursor: pointer;
                         transition: all 0.2s ease;
                         margin-top: 10px;
-                    " onmouseover="this.style.opacity='0.9';" 
+                    " onmouseover="this.style.opacity='0.9';"
                        onmouseout="this.style.opacity='1';">
                         ${QuizBankIcons.svg('download', 14)} Export This Quiz Questions
                     </button>
+                    <a id="review-revyard-btn" href="${revYardReviewUrl}" target="_blank" rel="noopener" style="
+                        display: inline-flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 6px;
+                        width: 100%;
+                        box-sizing: border-box;
+                        background: linear-gradient(135deg, #9C27B0, #7B1FA2);
+                        color: white;
+                        border: none;
+                        padding: 8px 12px;
+                        border-radius: 6px;
+                        font-size: 11px;
+                        font-weight: bold;
+                        cursor: pointer;
+                        text-decoration: none;
+                        transition: all 0.2s ease;
+                        margin-top: 8px;
+                    " onmouseover="this.style.opacity='0.9';"
+                       onmouseout="this.style.opacity='1';">
+                        ${QuizBankIcons.svg('book-open', 14)} Review
+                    </a>
                 </div>
                 
                 <!-- This Course Section -->
