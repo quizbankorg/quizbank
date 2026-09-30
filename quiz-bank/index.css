@@ -124,6 +124,10 @@ body:not(.quizbank-stealth) .quizbank-countdown-header {
   gap: 8px;
 }
 
+body:not(.quizbank-stealth) .quizbank-countdown-header .question_points_holder {
+  margin-left: auto;
+}
+
 body.quizbank-stealth .quizbank-auto-countdown {
   display: none !important;
 }
