@@ -38,6 +38,7 @@ const Correct = {
 
 const AUTO_SELECT_DELAY_MIN_MS = 10_000
 const AUTO_SELECT_DELAY_MAX_MS = 20_000
+const AUTO_NAVIGATION_DELAY_MS = 2_000
 let autoSelectionGeneration = 0
 
 function createAutoSelectionDelay(logger) {
@@ -46,6 +47,11 @@ function createAutoSelectionDelay(logger) {
   )
   logger?.info(`Auto-select delay: ${Math.round(delayMs / 1000)} seconds`)
   return new Promise(resolve => setTimeout(resolve, delayMs))
+}
+
+function createAutoNavigationDelay(logger) {
+  logger?.info(`Auto-navigation readiness delay: ${AUTO_NAVIGATION_DELAY_MS / 1000} seconds`)
+  return new Promise(resolve => setTimeout(resolve, AUTO_NAVIGATION_DELAY_MS))
 }
 
 // ==================== GEMINI AI ====================
@@ -243,6 +249,8 @@ class EnhancedQuizLoader {
     this.pendingAllQuestionsSubmit = false
     this.singleQuestionNavigationClicked = false
     this.allQuestionsSubmitClicked = false
+    this.singleQuestionNavigationPending = false
+    this.allQuestionsSubmitPending = false
     // Pending/in-flight AI questions keyed by questionId.
     // Entry: { question, questionType, displayer, quizContext, button, state, requestId }
     this.aiRegistry = new Map()
@@ -686,11 +694,11 @@ class EnhancedQuizLoader {
     this.isRenderingAnswers = false
     if (this.pendingSingleQuestionNavigation) {
       this.pendingSingleQuestionNavigation = false
-      this.clickSingleQuestionNavigation()
+      await this.clickSingleQuestionNavigation()
     }
     if (this.pendingAllQuestionsSubmit) {
       this.pendingAllQuestionsSubmit = false
-      this.clickAllQuestionsSubmit()
+      await this.clickAllQuestionsSubmit()
     }
   }
 
@@ -784,7 +792,13 @@ class EnhancedQuizLoader {
     this.clickSingleQuestionNavigation()
   }
 
-  clickSingleQuestionNavigation() {
+  async clickSingleQuestionNavigation() {
+    if (this.singleQuestionNavigationClicked || this.singleQuestionNavigationPending) return false
+
+    this.singleQuestionNavigationPending = true
+    await createAutoNavigationDelay(this.logger)
+    this.singleQuestionNavigationPending = false
+
     if (this.singleQuestionNavigationClicked) return false
 
     const navigationButton = this.findSingleQuestionNavigationButton()
@@ -799,7 +813,13 @@ class EnhancedQuizLoader {
     return true
   }
 
-  clickAllQuestionsSubmit() {
+  async clickAllQuestionsSubmit() {
+    if (this.allQuestionsSubmitClicked || this.allQuestionsSubmitPending) return false
+
+    this.allQuestionsSubmitPending = true
+    await createAutoNavigationDelay(this.logger)
+    this.allQuestionsSubmitPending = false
+
     if (this.allQuestionsSubmitClicked) return false
 
     const submitButton = this.findAllQuestionsSubmitButton()
