@@ -161,6 +161,12 @@ body.quizbank-stealth .quizbank-auto-countdown {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
+#review-revyard-btn:focus,
+#review-revyard-btn:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 .database-status h4 {
   margin: 0 0 8px 0;
   color: #333;
