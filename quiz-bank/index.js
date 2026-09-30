@@ -38,15 +38,51 @@ const Correct = {
 
 const AUTO_SELECT_DELAY_MIN_MS = 10_000
 const AUTO_SELECT_DELAY_MAX_MS = 20_000
-const AUTO_NAVIGATION_DELAY_MS = 2_000
+const AUTO_NAVIGATION_DELAY_MS = 500
 let autoSelectionGeneration = 0
 
-function createAutoSelectionDelay(logger) {
+function mountAutoSelectionCountdown(questionId, delayMs, stealthMode) {
+  if (stealthMode || !questionId || typeof document === 'undefined') return null
+
+  const questionElement = document.getElementById(`question_${questionId}`)
+  const mountElement = questionElement?.querySelector('.header') || questionElement
+  if (!mountElement) return null
+
+  mountElement.querySelectorAll('.quizbank-auto-countdown').forEach(element => element.remove())
+
+  const countdown = document.createElement('div')
+  countdown.className = 'quizbank-auto-countdown'
+  countdown.setAttribute('role', 'status')
+  countdown.setAttribute('aria-live', 'polite')
+  mountElement.prepend(countdown)
+
+  const startedAt = Date.now()
+  const updateCountdown = () => {
+    const remainingMs = Math.max(0, delayMs - (Date.now() - startedAt))
+    countdown.textContent = remainingMs > 0
+      ? `Auto-selecting in ${Math.ceil(remainingMs / 1000)}s`
+      : 'Selecting…'
+  }
+
+  updateCountdown()
+  const intervalId = setInterval(updateCountdown, 100)
+
+  return () => {
+    clearInterval(intervalId)
+    countdown.remove()
+  }
+}
+
+function createAutoSelectionDelay(logger, questionId = null, stealthMode = false) {
   const delayMs = AUTO_SELECT_DELAY_MIN_MS + Math.floor(
     Math.random() * (AUTO_SELECT_DELAY_MAX_MS - AUTO_SELECT_DELAY_MIN_MS + 1)
   )
   logger?.info(`Auto-select delay: ${Math.round(delayMs / 1000)} seconds`)
-  return new Promise(resolve => setTimeout(resolve, delayMs))
+  const removeCountdown = mountAutoSelectionCountdown(questionId, delayMs, stealthMode)
+  return new Promise(resolve => setTimeout(() => {
+    removeCountdown?.()
+    resolve()
+  }, delayMs))
 }
 
 function createAutoNavigationDelay(logger) {
@@ -1013,7 +1049,7 @@ class EnhancedQuizLoader {
       QuestionTypes.MULTIPLE_ANSWER
     ].includes(entry.questionType)
     const selectionDelay = this.autoSelectAnswers && aiUsesChoiceSelection
-      ? createAutoSelectionDelay(this.logger)
+      ? createAutoSelectionDelay(this.logger, questionId, this.stealthMode)
       : null
     const result = await askGemini(
       questionInfo,
@@ -1174,6 +1210,9 @@ class EnhancedQuizLoader {
 
     // Remove source badges
     document.querySelectorAll('.answer-source-badge').forEach(el => el.remove())
+
+    // Remove active selection countdowns
+    document.querySelectorAll('.quizbank-auto-countdown').forEach(el => el.remove())
 
     // Remove correct/wrong answer badges
     document
@@ -2170,7 +2209,7 @@ class EnhancedDisplayer {
     if (!bestAnswer) return
 
     const selectionDelay = autoSelect && bestAnswer.correct === Correct.TRUE
-      ? createAutoSelectionDelay(this.logger)
+      ? createAutoSelectionDelay(this.logger, questionId, this.stealthMode)
       : null
 
     // Use the original working approach: direct element ID lookup
@@ -2211,8 +2250,10 @@ class EnhancedDisplayer {
     }
 
     if (autoSelect && bestAnswer.correct === Correct.TRUE && el) {
-      await this.selectChoiceInput(el, selectionDelay)
+      return this.selectChoiceInput(el, selectionDelay)
     }
+
+    return false
   }
 
   /**
@@ -2222,13 +2263,15 @@ class EnhancedDisplayer {
     const answerText = question.bestAnswer?.text
     if (!answerText) return
 
+    let selectedAutomatically = false
+
     const isChoiceQuestion = [
       QuestionTypes.MULTIPLE_CHOICE,
       QuestionTypes.TRUE_FALSE,
       QuestionTypes.MULTIPLE_ANSWER
     ].includes(questionType)
     if (autoSelect && isChoiceQuestion && !selectionDelay) {
-      selectionDelay = createAutoSelectionDelay(this.logger)
+      selectionDelay = createAutoSelectionDelay(this.logger, questionId, this.stealthMode)
     }
 
     // Clean up any existing AI badges for this question to prevent duplicates on rerun
@@ -2270,7 +2313,7 @@ class EnhancedDisplayer {
           this.highlightAllWrongAnswers(question, questionId)
         }
         if (autoSelect) {
-          await this.selectChoiceInputs(matchedLabels, selectionDelay)
+          selectedAutomatically = await this.selectChoiceInputs(matchedLabels, selectionDelay)
         }
         break
       }
@@ -2292,7 +2335,10 @@ class EnhancedDisplayer {
           this.highlightAllWrongAnswers(question, questionId)
         }
         if (autoSelect) {
-          await this.selectChoiceInputs(Array.from(matchedLabels), selectionDelay)
+          selectedAutomatically = await this.selectChoiceInputs(
+            Array.from(matchedLabels),
+            selectionDelay
+          )
         }
         break
       }
@@ -2320,6 +2366,8 @@ class EnhancedDisplayer {
         }
       }
     }
+
+    return selectedAutomatically
   }
 
   highlightAIAnswerWithBadge(element, customMessage = null) {
@@ -2394,7 +2442,7 @@ class EnhancedDisplayer {
     if (this.stealthMode && !isCorrect) return
 
     const selectionDelay = autoSelect && isCorrect
-      ? createAutoSelectionDelay(this.logger)
+      ? createAutoSelectionDelay(this.logger, questionId, this.stealthMode)
       : null
 
     // Resolve the selected option inputs.
@@ -2419,8 +2467,10 @@ class EnhancedDisplayer {
     }
 
     if (autoSelect && isCorrect) {
-      await this.selectChoiceInputs(selectedInputs, selectionDelay)
+      return this.selectChoiceInputs(selectedInputs, selectionDelay)
     }
+
+    return false
   }
 
   /**

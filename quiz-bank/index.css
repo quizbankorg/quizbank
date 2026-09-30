@@ -103,6 +103,25 @@ body:not(.quizbank-stealth) .answer-source-badge {
   animation: highlightSelect 2s ease-in-out;
 }
 
+body:not(.quizbank-stealth) .quizbank-auto-countdown {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin: 0 0 8px;
+  padding: 4px 9px;
+  border: 1px solid rgba(156, 39, 176, 0.35);
+  border-radius: 999px;
+  background: rgba(156, 39, 176, 0.1);
+  color: #7b1fa2;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+body.quizbank-stealth .quizbank-auto-countdown {
+  display: none !important;
+}
+
 @keyframes highlightSelect {
   0% {
     box-shadow: 0 0 12px rgba(76, 175, 80, 0.8);
