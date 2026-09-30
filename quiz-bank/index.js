@@ -49,12 +49,13 @@ function mountAutoSelectionCountdown(questionId, delayMs, stealthMode) {
   if (!mountElement) return null
 
   mountElement.querySelectorAll('.quizbank-auto-countdown').forEach(element => element.remove())
+  mountElement.classList.add('quizbank-countdown-header')
 
   const countdown = document.createElement('div')
   countdown.className = 'quizbank-auto-countdown'
   countdown.setAttribute('role', 'status')
   countdown.setAttribute('aria-live', 'polite')
-  mountElement.prepend(countdown)
+  mountElement.append(countdown)
 
   const startedAt = Date.now()
   const updateCountdown = () => {
@@ -70,6 +71,7 @@ function mountAutoSelectionCountdown(questionId, delayMs, stealthMode) {
   return () => {
     clearInterval(intervalId)
     countdown.remove()
+    mountElement.classList.remove('quizbank-countdown-header')
   }
 }
 
@@ -1213,6 +1215,9 @@ class EnhancedQuizLoader {
 
     // Remove active selection countdowns
     document.querySelectorAll('.quizbank-auto-countdown').forEach(el => el.remove())
+    document
+      .querySelectorAll('.quizbank-countdown-header')
+      .forEach(el => el.classList.remove('quizbank-countdown-header'))
 
     // Remove correct/wrong answer badges
     document
