@@ -1545,6 +1545,7 @@ class EnhancedQuizLoader {
 
       // Get Global Knowledge Bank question count (fast)
       const globalQuestionCount = await this.dbManager.getGlobalQuestionCount()
+      const quizBankDeviceId = await this.dbManager.getDeviceId()
 
       // Filter for questions that might be related to this quiz (or show all course knowledge)
       const knowledgeBankData = courseKnowledgeBase.map(item => ({
@@ -1563,7 +1564,8 @@ class EnhancedQuizLoader {
         quizId,
         canvasAnswers,
         knowledgeBankData,
-        globalQuestionCount
+        globalQuestionCount,
+        quizBankDeviceId
       )
     } catch (error) {
       this.logger.error('Error showing preview panel:', error)
@@ -1577,7 +1579,14 @@ class EnhancedQuizLoader {
   /**
    * Create and display the preview panel
    */
-  createPreviewPanel(courseId, quizId, canvasAnswers, knowledgeBankData, globalQuestionCount = 0) {
+  createPreviewPanel(
+    courseId,
+    quizId,
+    canvasAnswers,
+    knowledgeBankData,
+    globalQuestionCount = 0,
+    quizBankDeviceId = ''
+  ) {
     // Remove existing panel if any
     const existingPanel = document.getElementById('quiz-preview-panel')
     if (existingPanel) {
@@ -1588,7 +1597,12 @@ class EnhancedQuizLoader {
     const canvasStats = this.calculateCanvasStats(canvasAnswers)
     const kbStats = this.calculateKnowledgeBankStats(knowledgeBankData)
     const globalStats = { totalQuestions: typeof globalQuestionCount === 'number' ? globalQuestionCount : 0 }
-    const revYardReviewUrl = `${QUIZBANK_API_URL}/revyard?quizbank_course_id=${encodeURIComponent(courseId)}&quizbank_quiz_id=${encodeURIComponent(quizId)}`
+    const reviewParams = new URLSearchParams({
+      quizbank_course_id: String(courseId),
+      quizbank_quiz_id: String(quizId),
+      quizbank_device_id: quizBankDeviceId
+    })
+    const revYardReviewUrl = `${QUIZBANK_API_URL}/revyard?${reviewParams.toString()}`
 
     // Create panel element
     const panel = document.createElement('div')
