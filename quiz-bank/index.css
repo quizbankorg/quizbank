@@ -107,7 +107,7 @@ body:not(.quizbank-stealth) .quizbank-auto-countdown {
   display: inline-flex;
   align-items: center;
   width: fit-content;
-  margin: 0 0 0 auto;
+  margin: 0;
   padding: 4px 9px;
   border: 1px solid rgba(156, 39, 176, 0.35);
   border-radius: 999px;

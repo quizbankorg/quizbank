@@ -55,7 +55,12 @@ function mountAutoSelectionCountdown(questionId, delayMs, stealthMode) {
   countdown.className = 'quizbank-auto-countdown'
   countdown.setAttribute('role', 'status')
   countdown.setAttribute('aria-live', 'polite')
-  mountElement.append(countdown)
+  const questionName = mountElement.querySelector('.question_name')
+  if (questionName) {
+    questionName.after(countdown)
+  } else {
+    mountElement.append(countdown)
+  }
 
   const startedAt = Date.now()
   const updateCountdown = () => {
