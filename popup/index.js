@@ -40,7 +40,6 @@ const elements = {
   clipboardAutoContent: document.getElementById('clipboard-auto-content'),
   qrCode: document.getElementById('qr-code'),
   stealthToggle: document.getElementById('stealth-toggle'),
-  aiToggle: document.getElementById('ai-toggle'),
   autoSelectToggle: document.getElementById('auto-select-toggle'),
   clipboardToggle: document.getElementById('clipboard-toggle'),
 };
@@ -385,53 +384,6 @@ function setupStealthToggle() {
   });
 }
 
-// ==================== AI MODE FUNCTIONALITY ====================
-
-async function loadAIPreference() {
-  try {
-    const result = await browser.storage.local.get(['aiMode']);
-    const isEnabled = result.aiMode !== false; // default enabled
-    if (elements.aiToggle) {
-      elements.aiToggle.checked = isEnabled;
-    }
-    return isEnabled;
-  } catch (e) {
-    console.log('Could not load AI preference, defaulting to enabled');
-    return true;
-  }
-}
-
-async function saveAIPreference(enabled) {
-  try {
-    await browser.storage.local.set({ aiMode: enabled });
-    console.log('AI preference saved:', enabled);
-  } catch (e) {
-    console.log('Could not save AI preference');
-  }
-}
-
-function setupAIToggle() {
-  if (!elements.aiToggle) return;
-
-  elements.aiToggle.addEventListener('change', async (e) => {
-    const isEnabled = e.target.checked;
-    await saveAIPreference(isEnabled);
-
-    try {
-      const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-      if (tabs.length > 0) {
-        await browser.tabs.sendMessage(tabs[0].id, {
-          type: `${prefix}-set-ai`,
-          enabled: isEnabled
-        });
-        console.log('AI mode toggled:', isEnabled ? 'ON' : 'OFF');
-      }
-    } catch (e) {
-      console.log('Could not communicate with content script:', e);
-    }
-  });
-}
-
 // ==================== AUTO-SELECT FUNCTIONALITY ====================
 
 async function loadAutoSelectPreference() {
@@ -490,15 +442,15 @@ function updateClipboardSectionVisibility(isEnabled) {
 async function loadClipboardPreference() {
   try {
     const result = await browser.storage.local.get(['clipboardAutoEnabled']);
-    const isEnabled = result.clipboardAutoEnabled !== false; // default enabled
+    const isEnabled = result.clipboardAutoEnabled === true;
     if (elements.clipboardToggle) {
       elements.clipboardToggle.checked = isEnabled;
     }
     updateClipboardSectionVisibility(isEnabled);
     return isEnabled;
   } catch (e) {
-    console.log('Could not load ClipboardAuto preference, defaulting to enabled');
-    return true;
+    console.log('Could not load ClipboardAuto preference, defaulting to disabled');
+    return false;
   }
 }
 
@@ -781,8 +733,6 @@ async function initializePopup() {
   await loadLoggingPreference();
   setupStealthToggle();
   await loadStealthPreference();
-  setupAIToggle();
-  await loadAIPreference();
   setupAutoSelectToggle();
   await loadAutoSelectPreference();
   setupClipboardToggle();

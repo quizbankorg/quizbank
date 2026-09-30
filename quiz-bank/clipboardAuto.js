@@ -266,16 +266,18 @@ const ClipboardAuto = {
     }
 };
 
-// Start ClipboardAuto automatically when the script loads, unless disabled by preference
+// Start ClipboardAuto automatically when explicitly enabled by preference
 (async () => {
     try {
         const result = await browser.storage.local.get(['clipboardAutoEnabled']);
-        if (result.clipboardAutoEnabled === false) {
+        if (result.clipboardAutoEnabled !== true) {
             ClipboardAuto.getLogger().info('🛑 ClipboardAuto disabled by preference');
             return;
         }
     } catch (e) {
-        // If preference can't be read, default to enabled
+        // If preference cannot be read, default to disabled
+        ClipboardAuto.getLogger().info('🛑 ClipboardAuto disabled by default');
+        return;
     }
     ClipboardAuto.start();
 })();

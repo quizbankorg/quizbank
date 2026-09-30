@@ -280,7 +280,6 @@ class EnhancedQuizLoader {
     this.questionCompiler = new QuestionCompiler(this.logger, this.dbManager)
     this.initialized = false
     this.stealthMode = false // Default to disabled
-    this.aiMode = true // Default to enabled
     this.autoSelectAnswers = false // Default to badges-only behavior
     this.isRenderingAnswers = false
     this.pendingSingleQuestionNavigation = false
@@ -311,15 +310,6 @@ class EnhancedQuizLoader {
         this.questionCompiler.setStealthMode(this.stealthMode)
       } catch (e) {
         this.logger.warn('Failed to load stealth mode preference')
-      }
-
-      // Load AI mode preference (default enabled)
-      try {
-        const result = await browser.storage.local.get(['aiMode'])
-        this.aiMode = result.aiMode !== false
-        this.logger.info(`AI mode: ${this.aiMode ? 'ON' : 'OFF'}`)
-      } catch (e) {
-        this.logger.warn('Failed to load AI mode preference')
       }
 
       // Load answer selection preference (default disabled)
@@ -499,34 +489,19 @@ class EnhancedQuizLoader {
           enhancedAnswers[questionId] = enhancedQuestion || canvasQuestion
         }
       } else {
-        // No known-correct answer: brand new OR only previous wrong attempts.
-        // AI is manual - offer an "Ask AI" button instead of calling Gemini now.
+        // No known-correct answer: offer Ask AI, or auto-run when auto-select is enabled.
         const knownWrongAnswers = [
           ...(enhancedQuestion?.wrongAnswers || []),
           ...(canvasQuestion?.wrongAnswers || [])
         ]
 
-        if (this.aiMode) {
-          // AI is manual (right-click / button) and works in stealth too.
-          enhancedAnswers[questionId] = {
-            source: 'ai_pending',
-            aiPending: true,
-            questionText: questionInfo.questionText,
-            questionType: questionInfo.questionType,
-            options: questionInfo.options,
-            wrongAnswers: knownWrongAnswers
-          }
-        } else if (enhancedQuestion || canvasQuestion) {
-          // AI off - show previous (wrong) record
-          enhancedAnswers[questionId] = enhancedQuestion || canvasQuestion
-        } else {
-          // Brand new question - will be saved to knowledge bank after submission
-          enhancedAnswers[questionId] = {
-            source: 'new',
-            isNew: true,
-            questionText: questionInfo.questionText,
-            questionType: questionInfo.questionType
-          }
+        enhancedAnswers[questionId] = {
+          source: 'ai_pending',
+          aiPending: true,
+          questionText: questionInfo.questionText,
+          questionType: questionInfo.questionType,
+          options: questionInfo.options,
+          wrongAnswers: knownWrongAnswers
         }
       }
     }
@@ -3114,22 +3089,6 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     logger.info(`Stealth mode toggled to ${message.enabled ? 'ON' : 'OFF'} - re-running...`)
 
     // Re-run the main function to apply/remove badges
-    enhancedMain().catch(error => {
-      logger.error('QuizBank re-run failed:', error)
-    })
-
-    sendResponse({ success: true })
-    return true
-  }
-
-  if (message.type === `${prefix}-set-ai`) {
-    const logger = BrowserLogger.getInstance()
-    logger.info(`AI mode toggled to ${message.enabled ? 'ON' : 'OFF'} - re-running...`)
-    if (currentLoader) {
-      currentLoader.aiMode = message.enabled
-    }
-
-    // Re-run the main function to apply/remove AI answers
     enhancedMain().catch(error => {
       logger.error('QuizBank re-run failed:', error)
     })
