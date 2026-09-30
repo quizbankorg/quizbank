@@ -2321,7 +2321,17 @@ class EnhancedDisplayer {
     }
 
     const labels = document.querySelectorAll(`#question_${questionId} .answer_label`)
-    if (labels.length === 0 && questionType !== QuestionTypes.ESSAY_QUESTION && questionType !== 'default') return
+    const isTextInputQuestion = [
+      QuestionTypes.FILL_IN_BLANK,
+      QuestionTypes.FORMULA_QUESTION,
+      QuestionTypes.NUMERICAL_ANSWER
+    ].includes(questionType)
+    if (
+      labels.length === 0 &&
+      !isTextInputQuestion &&
+      questionType !== QuestionTypes.ESSAY_QUESTION &&
+      questionType !== 'default'
+    ) return
 
     const findMatchingLabels = (targetText) => {
       const normalize = text => text.toLowerCase().replace(/\s+/g, ' ').trim()
