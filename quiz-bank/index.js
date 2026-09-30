@@ -1799,7 +1799,7 @@ class EnhancedQuizLoader {
             </a>
 
             <div style="padding-top: 8px; font-size: 11px; color: #666; text-align: center; border-top: 1px solid #eee;">
-                QuizBank Active ${QuizBankIcons.svg('sparkles', 12)} <span style="color: #999;">v${browser.runtime.getManifest().version}</span>
+                QuizBank Active <span style="color: #999;">v${browser.runtime.getManifest().version}</span>
             </div>
                             </div>
         `
