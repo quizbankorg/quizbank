@@ -65,7 +65,6 @@ body:not(.quizbank-stealth) .answer-source-badge {
 
 .badge-text {
   font-size: 10px;
-  text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
@@ -270,7 +269,6 @@ body:not(.quizbank-stealth) .wrong-answer-badge {
 
 .wrong-answer-badge .badge-text {
   font-size: 9px !important;
-  text-transform: uppercase;
   font-weight: bold;
 }
 
