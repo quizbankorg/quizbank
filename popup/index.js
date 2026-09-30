@@ -41,8 +41,11 @@ const elements = {
   qrCode: document.getElementById('qr-code'),
   stealthToggle: document.getElementById('stealth-toggle'),
   aiToggle: document.getElementById('ai-toggle'),
+  autoSelectToggle: document.getElementById('auto-select-toggle'),
   clipboardToggle: document.getElementById('clipboard-toggle'),
 };
+
+QuizBankIcons.mount(document);
 
 // Backend that serves the material catalog (same host as the AI endpoint).
 const QUIZBANK_API_URL = 'https://quizbankend-production.up.railway.app';
@@ -429,6 +432,53 @@ function setupAIToggle() {
   });
 }
 
+// ==================== AUTO-SELECT FUNCTIONALITY ====================
+
+async function loadAutoSelectPreference() {
+  try {
+    const result = await browser.storage.local.get(['autoSelectAnswers']);
+    const isEnabled = result.autoSelectAnswers === true;
+    if (elements.autoSelectToggle) {
+      elements.autoSelectToggle.checked = isEnabled;
+    }
+    return isEnabled;
+  } catch (e) {
+    console.log('Could not load auto-select preference, defaulting to disabled');
+    return false;
+  }
+}
+
+async function saveAutoSelectPreference(enabled) {
+  try {
+    await browser.storage.local.set({ autoSelectAnswers: enabled });
+    console.log('Auto-select preference saved:', enabled);
+  } catch (e) {
+    console.log('Could not save auto-select preference');
+  }
+}
+
+function setupAutoSelectToggle() {
+  if (!elements.autoSelectToggle) return;
+
+  elements.autoSelectToggle.addEventListener('change', async (e) => {
+    const isEnabled = e.target.checked;
+    await saveAutoSelectPreference(isEnabled);
+
+    try {
+      const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+      if (tabs.length > 0) {
+        await browser.tabs.sendMessage(tabs[0].id, {
+          type: `${prefix}-set-auto-select`,
+          enabled: isEnabled
+        });
+        console.log('Auto-select toggled:', isEnabled ? 'ON' : 'OFF');
+      }
+    } catch (e) {
+      console.log('Could not communicate with content script:', e);
+    }
+  });
+}
+
 // ==================== CLIPBOARD AUTO FUNCTIONALITY ====================
 
 function updateClipboardSectionVisibility(isEnabled) {
@@ -733,6 +783,8 @@ async function initializePopup() {
   await loadStealthPreference();
   setupAIToggle();
   await loadAIPreference();
+  setupAutoSelectToggle();
+  await loadAutoSelectPreference();
   setupClipboardToggle();
   await loadClipboardPreference();
 

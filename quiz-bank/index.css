@@ -43,48 +43,30 @@ body:not(.quizbank-stealth) .answer-source-badge {
 }
 
 .badge-icon {
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.qb-icon {
+  display: inline-block;
+  flex: 0 0 auto;
+  vertical-align: middle;
+}
+
+.qb-icon-spin {
+  animation: qb-icon-spin 1s linear infinite;
+}
+
+@keyframes qb-icon-spin {
+  to { transform: rotate(360deg); }
 }
 
 .badge-text {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-}
-
-/* Compact one-liner confidence indicators */
-body:not(.quizbank-stealth) .question_points_holder {
-  display: inline-flex !important;
-  align-items: center !important;
-  gap: 4px !important;
-  padding: 4px 8px !important;
-  border-radius: 12px !important;
-  font-size: 11px !important;
-  font-weight: bold !important;
-  margin-left: 8px !important;
-  vertical-align: middle !important;
-  white-space: nowrap !important;
-  color: white !important;
-}
-
-/* Enhanced point holders */
-.question_points_holder.knowledge-bank-answer {
-  background: linear-gradient(135deg, #4CAF50, #45a049) !important;
-  color: white !important;
-  box-shadow: 0 2px 4px rgba(76, 175, 80, 0.3) !important;
-}
-
-.question_points_holder.canvas-answer {
-  background: linear-gradient(135deg, #2196F3, #1976D2) !important;
-  color: white !important;
-  box-shadow: 0 2px 4px rgba(33, 150, 243, 0.3) !important;
-}
-
-.question_points_holder.new-question {
-  background: linear-gradient(135deg, #FF9800, #F57C00) !important;
-  color: white !important;
-  box-shadow: 0 2px 4px rgba(255, 152, 0, 0.3) !important;
-  animation: sparkle 2s ease-in-out infinite;
 }
 
 .answer-source {
@@ -214,13 +196,23 @@ body:not(.quizbank-stealth) .question_points_holder {
 }
 
 .answer-list li.checkmark::before {
-  content: "✅";
-  font-size: 14px;
+  content: "";
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  background-color: #4CAF50;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='m16 9-5.5 5.5L8 12'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='m16 9-5.5 5.5L8 12'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 .answer-list li.cross::before {
-  content: "❌";
-  font-size: 14px;
+  content: "";
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  background-color: #ff5722;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='m15 9-6 6'/%3E%3Cpath d='m9 9 6 6'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='m15 9-6 6'/%3E%3Cpath d='m9 9 6 6'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 /* Wrong answer badges - compact one-liner */

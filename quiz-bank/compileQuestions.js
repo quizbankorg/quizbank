@@ -1,5 +1,16 @@
 // ==================== QUESTION COMPILER CLASS ====================
 
+const LEGACY_BADGE_ICONS = Object.freeze({
+  '🏦': 'landmark',
+  '🎯': 'target',
+  '✨': 'sparkles',
+  '🤖': 'bot',
+  '❓': 'circle-question-mark',
+  '✅': 'circle-check',
+  '🚫': 'circle-x',
+  '❌': 'circle-x'
+})
+
 /**
  * QuestionCompiler - Captures and compiles quiz questions with QuizBank badges
  * Automatically saves question HTML organized by quiz ID and provides export functionality
@@ -335,9 +346,9 @@ class QuestionCompiler {
 
       // Build filter label for display
       const filterParts = []
-      if (config.includeCorrect) filterParts.push('✅ Correct')
-      if (config.includeWrong) filterParts.push('🚫 Wrong')
-      if (config.includeNew) filterParts.push('✨ New/Partial/Unknown')
+      if (config.includeCorrect) filterParts.push('Correct')
+      if (config.includeWrong) filterParts.push('Wrong')
+      if (config.includeNew) filterParts.push('New/Partial/Unknown')
       const filterLabel = filterParts.length === 3 ? 'All Questions' : filterParts.join(', ')
 
       // Generate questions HTML and count stats
@@ -438,11 +449,20 @@ class QuestionCompiler {
     try {
       const doc = new DOMParser().parseFromString(html, 'text/html')
       this.sanitizeElement(doc.body)
+      doc.body.querySelectorAll('.badge-icon').forEach(iconElement => {
+        const iconName = LEGACY_BADGE_ICONS[iconElement.textContent.trim()]
+        const iconMarkup = iconName ? this.iconMarkup(iconName, 12) : ''
+        if (iconMarkup) iconElement.innerHTML = iconMarkup
+      })
       return doc.body.innerHTML
     } catch (error) {
       this.logger.warn('Failed to sanitize stored HTML, escaping instead:', error?.message)
       return this.escapeHTML(html)
     }
+  }
+
+  iconMarkup(name, size = 16) {
+    return globalThis.QuizBankIcons?.svg(name, size) || ''
   }
 
   /**
@@ -518,9 +538,9 @@ class QuestionCompiler {
 
       // Build filter label for display
       const filterParts = []
-      if (config.includeCorrect) filterParts.push('✅ Correct')
-      if (config.includeWrong) filterParts.push('🚫 Wrong')
-      if (config.includeNew) filterParts.push('✨ New/Partial/Unknown')
+      if (config.includeCorrect) filterParts.push('Correct')
+      if (config.includeWrong) filterParts.push('Wrong')
+      if (config.includeNew) filterParts.push('New/Partial/Unknown')
       const filterLabel = filterParts.length === 3 ? 'All Questions' : filterParts.join(', ')
 
       // Group questions by quiz
@@ -655,7 +675,7 @@ class QuestionCompiler {
     Object.entries(quizGroups).forEach(([quizId, quizData]) => {
       questionsHTML += `
         <div class="quiz-section">
-          <h2 class="quiz-section-title">📝 ${this.escapeHTML(quizData.quizName)}</h2>
+          <h2 class="quiz-section-title">${this.iconMarkup('file-text', 16)} ${this.escapeHTML(quizData.quizName)}</h2>
       `
 
       Object.entries(quizData.questions).forEach(([qId, data]) => {
@@ -695,14 +715,14 @@ class QuestionCompiler {
     Object.entries(courseGroups).forEach(([courseId, courseData]) => {
       questionsHTML += `
         <div class="course-section">
-          <h2 class="course-section-title">📚 ${this.escapeHTML(courseData.courseName)}</h2>
+          <h2 class="course-section-title">${this.iconMarkup('book-open', 20)} ${this.escapeHTML(courseData.courseName)}</h2>
       `
 
       Object.entries(courseData.quizzes).forEach(([quizId, quizData]) => {
         totalQuizzes++
         questionsHTML += `
           <div class="quiz-section">
-            <h3 class="quiz-section-title">📝 ${this.escapeHTML(quizData.quizName)}</h3>
+            <h3 class="quiz-section-title">${this.iconMarkup('file-text', 16)} ${this.escapeHTML(quizData.quizName)}</h3>
         `
 
         Object.entries(quizData.questions).forEach(([qId, data]) => {
@@ -734,13 +754,25 @@ class QuestionCompiler {
    * Generate base HTML document structure
    */
   generateBaseHTMLDocument(title, subtitle, questionsHTML, totalCount, correctCount, wrongCount, newCount, isGlobal = false, filterLabel = 'All Questions') {
+    const filterIconNames = {
+      Correct: 'circle-check',
+      Wrong: 'circle-x',
+      'New/Partial/Unknown': 'sparkles'
+    }
+    const filterItemsHTML = filterLabel === 'All Questions'
+      ? ''
+      : filterLabel.split(', ').map(label => {
+        const iconName = filterIconNames[label]
+        const iconMarkup = iconName ? this.iconMarkup(iconName, 14) : ''
+        return `<span class="export-filter-item">${iconMarkup}${this.escapeHTML(label)}</span>`
+      }).join(' ')
     const filterInfoHTML = filterLabel !== 'All Questions' ? `
         <div style="margin-top: 16px; padding: 12px; background: ${isGlobal ? 'rgba(255,255,255,0.1)' : '#e8f4fd'}; border-radius: 6px; border-left: 3px solid ${isGlobal ? 'rgba(255,255,255,0.5)' : '#2196F3'};">
             <div style="font-size: 11px; color: ${isGlobal ? 'rgba(255,255,255,0.8)' : '#1976D2'}; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 4px;">
                 Export Filter Applied
             </div>
-            <div style="font-size: 13px; color: ${isGlobal ? 'white' : '#1565C0'}; font-weight: 500;">
-                ${this.escapeHTML(filterLabel)}
+            <div class="export-filter-items" style="font-size: 13px; color: ${isGlobal ? 'white' : '#1565C0'}; font-weight: 500;">
+                ${filterItemsHTML}
             </div>
         </div>
     ` : ''
@@ -779,6 +811,9 @@ class QuestionCompiler {
         }
         
         .quiz-header h1 {
+            display: flex;
+            align-items: center;
+            gap: 10px;
             margin: 0 0 8px 0;
             font-size: 28px;
             font-weight: 600;
@@ -804,6 +839,10 @@ class QuestionCompiler {
         }
         
         .stat-label {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
             font-size: 10px;
             opacity: 0.8;
             text-transform: uppercase;
@@ -815,6 +854,21 @@ class QuestionCompiler {
             font-weight: 700;
             margin-top: 4px;
         }
+
+        .export-filter-items {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .export-filter-item, .badge-icon {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .qb-icon { display: inline-block; flex: 0 0 auto; vertical-align: middle; }
         
         .course-section {
             background: white;
@@ -910,7 +964,7 @@ class QuestionCompiler {
 </head>
 <body>
     <div class="quiz-header">
-        <h1>${isGlobal ? '🏦' : '📚'} ${this.escapeHTML(title)}</h1>
+        <h1>${this.iconMarkup(isGlobal ? 'landmark' : 'book-open', 24)} ${this.escapeHTML(title)}</h1>
         <div class="subtitle">${this.escapeHTML(subtitle)}</div>
         
         <div class="stats-grid">
@@ -919,15 +973,15 @@ class QuestionCompiler {
                 <div class="stat-value">${totalCount}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">✅ Correct</div>
+                <div class="stat-label">${this.iconMarkup('circle-check', 14)} Correct</div>
                 <div class="stat-value">${correctCount}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">🚫 Wrong</div>
+                <div class="stat-label">${this.iconMarkup('circle-x', 14)} Wrong</div>
                 <div class="stat-value">${wrongCount}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">✨ New</div>
+                <div class="stat-label">${this.iconMarkup('sparkles', 14)} New</div>
                 <div class="stat-value">${newCount}</div>
             </div>
         </div>

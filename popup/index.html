@@ -11,7 +11,7 @@
 <body>
   <!-- Settings Dropdown (shown only when access is valid) -->
   <div class="dropdown hidden">
-    <div class="gear-icon">⚙️</div>
+    <div class="gear-icon" data-icon="settings" data-icon-size="24" aria-label="Settings"></div>
     <div class="dropdown-menu">
       <div class="toggle-option">
         <label class="toggle-label">
@@ -20,7 +20,7 @@
           <span class="toggle-text">Enable Logging</span>
         </label>
         <a href="#" id="download-debug" class="debug-link">
-          <span class="download-icon">📥</span>
+          <span class="download-icon" data-icon="download" data-icon-size="14" aria-hidden="true"></span>
           <span class="debug-text">logs</span>
         </a>
       </div>
@@ -40,6 +40,13 @@
       </div>
       <div class="toggle-option">
         <label class="toggle-label">
+          <input type="checkbox" id="auto-select-toggle">
+          <span class="toggle-slider"></span>
+          <span class="toggle-text">Auto-select answers</span>
+        </label>
+      </div>
+      <div class="toggle-option">
+        <label class="toggle-label">
           <input type="checkbox" id="clipboard-toggle">
           <span class="toggle-slider"></span>
           <span class="toggle-text">ClipboardAuto</span>
@@ -51,7 +58,7 @@
   <!-- Access Gate (shown when no valid access) -->
   <div id="access-gate" class="access-gate hidden">
     <div class="access-header">
-      <span class="lock-icon">🔐</span>
+      <span class="lock-icon" data-icon="lock-keyhole" data-icon-size="28" aria-hidden="true"></span>
       <h2>QuizBank Access</h2>
     </div>
     <p class="access-description">Enter your access code to activate QuizBank</p>
@@ -61,20 +68,20 @@
         spellcheck="false">
       <button id="activate-btn" class="activate-btn">
         <span class="btn-text">Activate</span>
-        <span class="btn-loading hidden">⏳</span>
+        <span class="btn-loading hidden" data-icon="loader-circle" aria-hidden="true"></span>
       </button>
     </div>
 
     <div id="voucher-error" class="voucher-error hidden"></div>
 
     <div class="voucher-warning">
-      <span class="warning-icon">⚠️</span>
+      <span class="warning-icon" data-icon="triangle-alert" aria-hidden="true"></span>
       <span>Reinstalling the extension requires re-entering an access code.</span>
     </div>
 
     <!-- Update Available Button (for non-access users) -->
     <a href="https://quizbankorg.github.io/quizbank/" target="_blank" id="update-btn-gate" class="update-btn hidden">
-      <span class="update-icon">🆕</span>
+      <span class="update-icon" data-icon="sparkles" aria-hidden="true"></span>
       <span>New Update Available</span>
     </a>
 
@@ -85,11 +92,11 @@
   <!-- Main Content (shown when access is valid) -->
   <div id="main-content" class="main-content hidden">
 
-    <header>🏦 QuizBank Status</header>
+    <header><span data-icon="landmark" data-icon-size="20" aria-hidden="true"></span>QuizBank Status</header>
 
     <!-- Access Info Banner -->
     <div id="access-info" class="access-info">
-      <span class="access-badge">✓ Active</span>
+      <span class="access-badge"><span data-icon="circle-check" data-icon-size="14" aria-hidden="true"></span>Active</span>
       <span id="access-expires" class="access-expires"></span>
     </div>
 
@@ -99,16 +106,16 @@
 
     <!-- Update Available Button -->
     <a href="https://quizbankorg.github.io/quizbank/" target="_blank" id="update-btn" class="update-btn hidden">
-      <span class="update-icon">🆕</span>
+      <span class="update-icon" data-icon="sparkles" aria-hidden="true"></span>
       <span>New Update Available</span>
     </a>
 
     <!-- ClipboardAuto Section -->
     <div class="clipboard-auto-section" id="clipboard-auto-section">
       <button class="clipboard-auto-btn" id="clipboard-auto-btn">
-        <span class="clipboard-auto-icon">📋</span>
+        <span class="clipboard-auto-icon" data-icon="clipboard-list" aria-hidden="true"></span>
         <span class="clipboard-auto-text">ClipboardAuto</span>
-        <span class="clipboard-auto-arrow" id="clipboard-auto-arrow">▼</span>
+        <span class="clipboard-auto-arrow" id="clipboard-auto-arrow" data-icon="chevron-down" aria-hidden="true"></span>
       </button>
       <div class="clipboard-auto-content hidden" id="clipboard-auto-content">
         <p class="qr-instruction">Scan QR to open on mobile:</p>
@@ -123,6 +130,7 @@
   <script src="browser-polyfill.min.js"></script>
   <script src="qrcode.min.js"></script>
   <script src="../database/supabase.min.js"></script>
+  <script src="../quiz-bank/icons.js"></script>
   <script src="index.js"></script>
 </body>
 

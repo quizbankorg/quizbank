@@ -36,6 +36,18 @@ const Correct = {
   PARTIAL: 'partial'
 }
 
+const AUTO_SELECT_DELAY_MIN_MS = 10_000
+const AUTO_SELECT_DELAY_MAX_MS = 20_000
+let autoSelectionGeneration = 0
+
+function createAutoSelectionDelay(logger) {
+  const delayMs = AUTO_SELECT_DELAY_MIN_MS + Math.floor(
+    Math.random() * (AUTO_SELECT_DELAY_MAX_MS - AUTO_SELECT_DELAY_MIN_MS + 1)
+  )
+  logger?.info(`Auto-select delay: ${Math.round(delayMs / 1000)} seconds`)
+  return new Promise(resolve => setTimeout(resolve, delayMs))
+}
+
 // ==================== GEMINI AI ====================
 // The background service worker (quiz-bank/background.js) relays the prompt to the
 // backend (render-server), which holds the Gemini API key and validates voucher
@@ -87,39 +99,9 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
   const prompt = buildGeminiPrompt(questionInfo, quizContext)
   logger?.info('🤖 Gemini prompt:', prompt)
 
-  // Read the user's selected AI context (course/module) and Supabase-synced note selection
-  let aiContext = { course: '', module: '' }
-  let selectedNoteIds = []
-  let selectedNoteNames = []
-  try {
-    const stored = await browser.storage.local.get([
-      'quizbank_ai_context',
-      'quizbank_user_notes',
-      'quizbank_selected_user_files'
-    ])
-    if (stored.quizbank_ai_context) {
-      aiContext = stored.quizbank_ai_context
-    }
-    const allNotes = stored.quizbank_user_notes || []
-    const rawSelectedIds = (stored.quizbank_selected_user_files || []).map(Number)
-
-    // Filter to only include IDs that exist in the active user notes list
-    selectedNoteIds = rawSelectedIds.filter(id => allNotes.some(n => Number(n.id) === id))
-    selectedNoteNames = allNotes
-      .filter(n => selectedNoteIds.includes(Number(n.id)))
-      .map(n => n.filename)
-
-    if (selectedNoteNames.length > 0) {
-      logger?.info(`📂 Grounding prompt with selected notes: ${selectedNoteNames.join(', ')}`)
-    }
-  } catch (e) { /* default to empty */ }
-
   const payload = {
     prompt,
     deviceId,
-    course: aiContext.course || null,
-    module: aiContext.module || null,
-    userNoteIds: selectedNoteIds.length > 0 ? selectedNoteIds.join(',') : null,
     requestId
   }
 
@@ -158,25 +140,6 @@ async function askGemini(questionInfo, quizContext, deviceId, logger, requestId)
 // Backend that relays prompts to Gemini.
 const QUIZBANK_API_URL = 'https://quizbankend-production.up.railway.app'
 
-/**
- * Call the backend from the content script and parse the JSON body.
- * All extension requests go direct - the old background-worker relay hung
- * forever on Orion iOS, which never delivers responses from a suspended worker.
- * Returns the parsed body, or { ok: false, error } on network/parse failure.
- */
-async function quizBankApiRequest(path, options = {}) {
-  try {
-    const response = await fetch(`${QUIZBANK_API_URL}${path}`, options)
-    const data = await response.json().catch(() => ({}))
-    if (!response.ok && data.ok === undefined) {
-      return { ok: false, status: response.status, error: data.error }
-    }
-    return data
-  } catch (error) {
-    return { ok: false, error: String(error) }
-  }
-}
-
 // AbortControllers for in-flight Gemini fetches, keyed by requestId.
 const directGeminiControllers = new Map()
 
@@ -184,7 +147,7 @@ const directGeminiControllers = new Map()
  * Fetch the Gemini answer from the backend, abortable via abortGeminiRequest.
  * Returns { ok, answer?, aborted?, error? }.
  */
-async function fetchGeminiDirect({ prompt, deviceId, course, module: moduleName, userNoteIds, requestId }) {
+async function fetchGeminiDirect({ prompt, deviceId, requestId }) {
   const controller = new AbortController()
   if (requestId) directGeminiControllers.set(requestId, controller)
 
@@ -193,7 +156,7 @@ async function fetchGeminiDirect({ prompt, deviceId, course, module: moduleName,
       method: 'POST',
       signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, deviceId, course, module: moduleName, userNoteIds })
+      body: JSON.stringify({ prompt, deviceId })
     })
 
     const data = await response.json().catch(() => ({}))
@@ -274,6 +237,12 @@ class EnhancedQuizLoader {
     this.initialized = false
     this.stealthMode = false // Default to disabled
     this.aiMode = true // Default to enabled
+    this.autoSelectAnswers = false // Default to badges-only behavior
+    this.isRenderingAnswers = false
+    this.pendingSingleQuestionNavigation = false
+    this.pendingAllQuestionsSubmit = false
+    this.singleQuestionNavigationClicked = false
+    this.allQuestionsSubmitClicked = false
     // Pending/in-flight AI questions keyed by questionId.
     // Entry: { question, questionType, displayer, quizContext, button, state, requestId }
     this.aiRegistry = new Map()
@@ -305,6 +274,15 @@ class EnhancedQuizLoader {
         this.logger.info(`AI mode: ${this.aiMode ? 'ON' : 'OFF'}`)
       } catch (e) {
         this.logger.warn('Failed to load AI mode preference')
+      }
+
+      // Load answer selection preference (default disabled)
+      try {
+        const result = await browser.storage.local.get(['autoSelectAnswers'])
+        this.autoSelectAnswers = result.autoSelectAnswers === true
+        this.logger.info(`Auto-select answers: ${this.autoSelectAnswers ? 'ON' : 'OFF'}`)
+      } catch (e) {
+        this.logger.warn('Failed to load auto-select preference')
       }
 
       // Gemini calls now go through the backend, which holds the API key and
@@ -587,23 +565,19 @@ class EnhancedQuizLoader {
 
   /**
    * Enhanced display function with knowledge bank integration
-   */
+  */
   async displayEnhancedAnswers(questions) {
-    const pointHolders = this.getPointElements()
     const questionIds = this.getQuestionIds()
     const questionTypes = document.getElementsByClassName('question_type')
-    const displayer = new EnhancedDisplayer(this.logger, this.stealthMode)
     const quizContext = this.getQuizContext()
-
-    // Store original point text if not already stored (to restore later in cleanup)
-    for (let holder of pointHolders) {
-      if (holder && !holder.getAttribute('data-original-points')) {
-        holder.setAttribute('data-original-points', holder.textContent.trim())
-      }
-    }
 
     // Cleanup existing badges/highlights if any
     this.cleanupDOM()
+    const displayer = new EnhancedDisplayer(this.logger, this.stealthMode)
+    const autoAIQuestionIds = []
+    this.isRenderingAnswers = true
+    this.pendingSingleQuestionNavigation = false
+    this.pendingAllQuestionsSubmit = false
 
     for (let i = 0; i < questionIds.length; i++) {
       const questionType = questionTypes[i]?.innerText
@@ -626,83 +600,76 @@ class EnhancedQuizLoader {
 
           // AI-answered question - match by option text, not Canvas answer id
           if (question.source === 'ai') {
-            displayer.displayAIAnswer(question, questionId, questionType)
+            const selectedAutomatically = await displayer.displayAIAnswer(
+              question,
+              questionId,
+              questionType,
+              this.autoSelectAnswers
+            )
+            this.queueQuestionNavigation(selectedAutomatically)
             continue
           }
 
-          // No known answer - flag any prior wrong answers and register for manual AI
-          // (right-click trigger, plus an "Ask AI" button when not in stealth).
+          // No known answer - flag prior wrong answers and register AI.
+          // Auto-select mode also starts AI requests automatically.
           if (question.aiPending) {
             if (!this.stealthMode && question.wrongAnswers && question.wrongAnswers.length > 0) {
               displayer.highlightAllWrongAnswers(question, questionId)
             }
             this.registerAIQuestion(questionId, question, questionType, displayer, quizContext)
+            if (this.autoSelectAnswers) {
+              autoAIQuestionIds.push(questionId)
+            }
             continue
           }
 
           // Display using enhanced displayer (badges only, no auto-selection)
+          let selectedAutomatically = false
           switch (questionType) {
             case QuestionTypes.ESSAY_QUESTION:
-              displayer.displayEssay(question, questionId, false) // No auto-fill, badges only
+              await displayer.displayEssay(question, questionId, false) // No auto-fill, badges only
               break
             case QuestionTypes.MATCHING:
-              displayer.displayMatching(question, questionId)
+              await displayer.displayMatching(question, questionId)
               break
             case QuestionTypes.MULTIPLE_DROPDOWN:
-              displayer.displayMultipleDropdowns(question, questionId)
+              await displayer.displayMultipleDropdowns(question, questionId)
               break
             case QuestionTypes.MULTIPLE_ANSWER:
-              displayer.displayMultipleAnswer(question, questionId, false) // No auto-selection, badges only
+              selectedAutomatically = await displayer.displayMultipleAnswer(
+                question,
+                questionId,
+                this.autoSelectAnswers
+              )
               break
             case QuestionTypes.MULTIPLE_CHOICE:
             case QuestionTypes.TRUE_FALSE:
-              displayer.displayMultipleChoice(question, questionId, false) // No auto-selection, badges only
+              selectedAutomatically = await displayer.displayMultipleChoice(
+                question,
+                questionId,
+                this.autoSelectAnswers
+              )
               break
             case QuestionTypes.FILL_IN_BLANK:
             case QuestionTypes.FORMULA_QUESTION:
             case QuestionTypes.NUMERICAL_ANSWER:
-              displayer.displayFillInBlank(question, questionId, false) // No auto-fill, badges only
+              await displayer.displayFillInBlank(question, questionId, false) // No auto-fill, badges only
               break
             case QuestionTypes.FILL_IN_MULTIPLE_BLANKS:
-              displayer.displayFillInMultipleBlank(question, questionId)
+              await displayer.displayFillInMultipleBlank(question, questionId)
               break
           }
+          this.queueQuestionNavigation(selectedAutomatically)
 
-          // Update point display (skip if stealth mode)
-          if (!this.stealthMode && pointHolders[i] && question.bestAnswer) {
-            const points = question.bestAnswer.points || 0
-            const earnedPoints = Math.round(points * 100) / 100
-            const sourceClass =
-              question.source === 'knowledge_bank'
-                ? 'knowledge-bank-answer'
-                : question.source === 'canvas'
-                  ? 'canvas-answer'
-                  : 'new-question'
-            pointHolders[i].classList.add(sourceClass)
-
-            // Safe HTML creation to prevent XSS
-            const sourceSpan = document.createElement('span')
-            sourceSpan.className = 'answer-source'
-            sourceSpan.textContent = `[${question.source.toUpperCase()}]`
-
-            const confidencePercent = (question.confidence * 100).toFixed(0)
-            const pointsText = document.createTextNode(` ${earnedPoints} pts (${confidencePercent}% confidence)`)
-
-            pointHolders[i].innerHTML = '' // Clear existing content
-            pointHolders[i].appendChild(sourceSpan)
-            pointHolders[i].appendChild(pointsText)
-          }
         } catch (e) {
           this.logger.error(`Failed to display question ${questionId}:`, e)
         }
-      } else {
-        // New question
-        if (!this.stealthMode && pointHolders[i]) {
-          pointHolders[
-            i
-          ].innerText = `(New Question) ${pointHolders[i].innerText}`
-        }
       }
+    }
+
+    // Run AI-pending questions sequentially when auto-select is enabled.
+    for (const questionId of autoAIQuestionIds) {
+      await this.triggerAI(questionId)
     }
 
     // Auto-capture all questions after displaying (compile questions with badges)
@@ -715,6 +682,136 @@ class EnhancedQuizLoader {
         questionIds
       )
     }
+
+    this.isRenderingAnswers = false
+    if (this.pendingSingleQuestionNavigation) {
+      this.pendingSingleQuestionNavigation = false
+      this.clickSingleQuestionNavigation()
+    }
+    if (this.pendingAllQuestionsSubmit) {
+      this.pendingAllQuestionsSubmit = false
+      this.clickAllQuestionsSubmit()
+    }
+  }
+
+  isSingleQuestionAtATimePage() {
+    return Boolean(document.querySelector('.one_question_at_a_time'))
+  }
+
+  isAllQuestionsPage() {
+    return Boolean(document.querySelector('.all_questions'))
+  }
+
+  findSingleQuestionNavigationButton() {
+    const isVisible = element => {
+      if (!element || element.disabled || element.hidden) return false
+      const style = window.getComputedStyle(element)
+      return style.display !== 'none' && style.visibility !== 'hidden'
+    }
+
+    const findVisible = selectors => {
+      for (const selector of selectors) {
+        const element = document.querySelector(selector)
+        if (isVisible(element)) return element
+      }
+      return null
+    }
+
+    const nextButton = findVisible([
+      '#next_question_button',
+      '#next_question',
+      '.next-question',
+      '.next_question',
+      '[data-action="next"]'
+    ])
+    if (nextButton) return nextButton
+
+    const textButtons = Array.from(
+      document.querySelectorAll('button, input[type="button"], input[type="submit"]')
+    )
+    const nextByText = textButtons.find(button => {
+      const label = (button.value || button.textContent || '').trim().toLowerCase()
+      return isVisible(button) && /^(next|next question|continue)\b/.test(label)
+    })
+    if (nextByText) return nextByText
+
+    if (!this.isSingleQuestionAtATimePage()) return null
+
+    return findVisible([
+      '#submit_quiz_button',
+      '.submit_button.quiz_submit',
+      'button.quiz_submit'
+    ])
+  }
+
+  findAllQuestionsSubmitButton() {
+    const candidates = [
+      '#submit_quiz_button',
+      '.submit_button.quiz_submit',
+      'button.quiz_submit'
+    ]
+    for (const selector of candidates) {
+      const button = document.querySelector(selector)
+      if (button && !button.disabled && !button.hidden) {
+        const style = window.getComputedStyle(button)
+        if (style.display !== 'none' && style.visibility !== 'hidden') {
+          return button
+        }
+      }
+    }
+    return null
+  }
+
+  queueQuestionNavigation(selectedAutomatically) {
+    if (!selectedAutomatically) return
+
+    if (this.isAllQuestionsPage()) {
+      if (this.isRenderingAnswers) {
+        this.pendingAllQuestionsSubmit = true
+      } else {
+        this.clickAllQuestionsSubmit()
+      }
+      return
+    }
+
+    if (!this.isSingleQuestionAtATimePage()) return
+
+    if (this.isRenderingAnswers) {
+      this.pendingSingleQuestionNavigation = true
+      return
+    }
+
+    this.clickSingleQuestionNavigation()
+  }
+
+  clickSingleQuestionNavigation() {
+    if (this.singleQuestionNavigationClicked) return false
+
+    const navigationButton = this.findSingleQuestionNavigationButton()
+    if (!navigationButton) {
+      this.logger.warn('Single-question navigation button not found')
+      return false
+    }
+
+    this.singleQuestionNavigationClicked = true
+    this.logger.info(`Clicking single-question navigation: ${navigationButton.textContent?.trim() || navigationButton.value || navigationButton.id}`)
+    navigationButton.click()
+    return true
+  }
+
+  clickAllQuestionsSubmit() {
+    if (this.allQuestionsSubmitClicked) return false
+
+    const submitButton = this.findAllQuestionsSubmitButton()
+    if (!submitButton) {
+      this.logger.warn('All-questions submit button not found')
+      return false
+    }
+
+    this.allQuestionsSubmitClicked = true
+    this.logger.info('Clicking all-questions submit button')
+    submitButton.click()
+    return true
   }
 
   /**
@@ -731,30 +828,30 @@ class EnhancedQuizLoader {
       const badge = document.createElement('div')
       badge.className = `answer-source-badge ${source}-source`
 
-      let badgeIcon, badgeText, badgeColor
+      let iconName, badgeText, badgeColor
       switch (source) {
         case 'knowledge_bank':
-          badgeIcon = '🏦'
+          iconName = 'landmark'
           badgeText = 'Knowledge Bank'
           badgeColor = '#4CAF50'
           break
         case 'canvas':
-          badgeIcon = '🎯'
+          iconName = 'clock'
           badgeText = 'Your History'
           badgeColor = '#2196F3'
           break
         case 'new':
-          badgeIcon = '✨'
+          iconName = 'sparkles'
           badgeText = 'New Question'
           badgeColor = '#FF9800'
           break
         case 'ai':
-          badgeIcon = '🤖'
+          iconName = 'bot'
           badgeText = 'AI'
           badgeColor = '#9C27B0'
           break
         default:
-          badgeIcon = '❓'
+          iconName = 'circle-question-mark'
           badgeText = 'Unknown'
           badgeColor = '#666'
       }
@@ -762,7 +859,7 @@ class EnhancedQuizLoader {
       // Safe HTML creation to prevent XSS
       const iconSpan = document.createElement('span')
       iconSpan.className = 'badge-icon'
-      iconSpan.textContent = badgeIcon
+      iconSpan.appendChild(QuizBankIcons.create(iconName, 12))
 
       const textSpan = document.createElement('span')
       textSpan.className = 'badge-text'
@@ -789,9 +886,8 @@ class EnhancedQuizLoader {
   }
 
   /**
-   * Register a question that has no known answer for manual AI.
-   * Trigger is a right-click (always) plus an "Ask AI" button when not in stealth.
-   * Gemini is only called on trigger, so requests are user-paced (avoids 503 bursts).
+   * Register a question that has no known answer for AI.
+   * Trigger is automatic when enabled, or manual otherwise.
    */
   registerAIQuestion(questionId, question, questionType, displayer, quizContext) {
     if (this.aiRegistry.has(questionId)) return
@@ -820,7 +916,10 @@ class EnhancedQuizLoader {
     const button = document.createElement('button')
     button.type = 'button'
     button.className = 'ai-ask-button answer-source-badge'
-    button.textContent = '🤖 Ask AI'
+    button.append(
+      QuizBankIcons.create('bot', 14),
+      document.createTextNode('Ask AI')
+    )
     button.style.cssText = `
                 display: inline-flex;
                 align-items: center;
@@ -844,9 +943,13 @@ class EnhancedQuizLoader {
   /**
    * Update an AI entry's button appearance (no-op in stealth where there is no button).
    */
-  setAIButtonState(entry, text, color, disabled) {
+  setAIButtonState(entry, iconName, text, color, disabled) {
     if (!entry.button) return
-    entry.button.textContent = text
+    const iconClass = iconName === 'loader-circle' ? 'qb-icon-spin' : ''
+    entry.button.replaceChildren(
+      QuizBankIcons.create(iconName, 14, iconClass),
+      document.createTextNode(text)
+    )
     entry.button.style.background = color
     entry.button.style.cursor = disabled ? 'wait' : 'pointer'
     entry.button.disabled = disabled
@@ -875,7 +978,7 @@ class EnhancedQuizLoader {
     const requestId = crypto.randomUUID()
     entry.requestId = requestId
     entry.state = 'asking'
-    this.setAIButtonState(entry, '🤖 Asking AI…', '#7B1FA2', true)
+    this.setAIButtonState(entry, 'loader-circle', 'Asking AI…', '#7B1FA2', true)
 
     const questionInfo = {
       questionText: entry.question.questionText,
@@ -884,6 +987,14 @@ class EnhancedQuizLoader {
     }
 
     const deviceId = await this.dbManager.getDeviceId()
+    const aiUsesChoiceSelection = [
+      QuestionTypes.MULTIPLE_CHOICE,
+      QuestionTypes.TRUE_FALSE,
+      QuestionTypes.MULTIPLE_ANSWER
+    ].includes(entry.questionType)
+    const selectionDelay = this.autoSelectAnswers && aiUsesChoiceSelection
+      ? createAutoSelectionDelay(this.logger)
+      : null
     const result = await askGemini(
       questionInfo,
       entry.quizContext,
@@ -898,7 +1009,7 @@ class EnhancedQuizLoader {
     }
     if (result.status === 'aborted') {
       entry.state = 'idle'
-      this.setAIButtonState(entry, '🤖 Ask AI', '#9C27B0', false)
+      this.setAIButtonState(entry, 'bot', 'Ask AI', '#9C27B0', false)
       return
     }
 
@@ -919,7 +1030,13 @@ class EnhancedQuizLoader {
         entry.button.remove()
         entry.button = null
       }
-      entry.displayer.displayAIAnswer(aiQuestion, questionId, entry.questionType)
+      const selectedAutomatically = await entry.displayer.displayAIAnswer(
+        aiQuestion,
+        questionId,
+        entry.questionType,
+        this.autoSelectAnswers,
+        selectionDelay
+      )
       // Badge only when not in stealth (stealth uses the divider-fade tell).
       if (!this.stealthMode) {
         this.addSourceBadge(questionId, 'ai')
@@ -937,11 +1054,13 @@ class EnhancedQuizLoader {
       } catch (e) {
         this.logger.warn(`Failed to re-capture AI question ${questionId}:`, e)
       }
+
+      this.queueQuestionNavigation(selectedAutomatically)
     } else {
       // Failed - allow retry (button turns red; right-click re-triggers in stealth).
       entry.state = 'failed'
       entry.requestId = null
-      this.setAIButtonState(entry, '🔄 Retry AI', '#D32F2F', false)
+      this.setAIButtonState(entry, 'rotate-cw', 'Retry AI', '#D32F2F', false)
     }
   }
 
@@ -955,7 +1074,7 @@ class EnhancedQuizLoader {
         abortGeminiRequest(entry.requestId)
         entry.requestId = null
         entry.state = 'idle'
-        this.setAIButtonState(entry, '🤖 Ask AI', '#9C27B0', false)
+        this.setAIButtonState(entry, 'bot', 'Ask AI', '#9C27B0', false)
       }
     }
   }
@@ -1018,10 +1137,20 @@ class EnhancedQuizLoader {
    */
   cleanupDOM() {
     this.logger.info('🧹 Cleaning up DOM badges and highlights...')
+    autoSelectionGeneration += 1
 
     // Abort any in-flight AI requests and clear the registry before a re-render
     this.abortAllAIRequests()
     this.aiRegistry.clear()
+
+    // Remove automatic selections from a previous render.
+    document
+      .querySelectorAll('[data-quizbank-auto-selected="true"]')
+      .forEach(input => {
+        input.checked = false
+        input.classList.remove('auto-selected')
+        input.removeAttribute('data-quizbank-auto-selected')
+      })
 
     // Remove source badges
     document.querySelectorAll('.answer-source-badge').forEach(el => el.remove())
@@ -1421,6 +1550,7 @@ class EnhancedQuizLoader {
             backdrop-filter: blur(5px);
         `
 
+    // Inline Lucide SVG paths; license notice lives in THIRD-PARTY-LICENSES.md.
     panel.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
                 <h4 style="margin: 0; color: #333; font-size: 16px; display: flex; align-items: center; gap: 8px;">
@@ -1446,7 +1576,7 @@ class EnhancedQuizLoader {
                 <!-- This Quiz Section -->
                 <div style="flex: 1; min-width: 200px;">
                     <h5 style="margin: 0 0 8px 0; color: #2196F3; font-size: 14px; display: flex; align-items: center; gap: 6px;">
-                        🎯 This Quiz
+                        ${QuizBankIcons.svg('target', 16)} This Quiz (You)
                     </h5>
                     <div class="status-item">
                         <span class="status-label">Questions Attempted:</span>
@@ -1465,6 +1595,10 @@ class EnhancedQuizLoader {
                         <span class="status-value">${canvasStats.successRate}%</span>
                     </div>
                     <button id="export-quiz-btn" style="
+                        display: inline-flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 6px;
                         width: 100%;
                         background: linear-gradient(135deg, #2196F3, #1976D2);
                         color: white;
@@ -1478,14 +1612,15 @@ class EnhancedQuizLoader {
                         margin-top: 10px;
                     " onmouseover="this.style.opacity='0.9';" 
                        onmouseout="this.style.opacity='1';">
-                        📥 Export This Quiz Questions
+                        ${QuizBankIcons.svg('download', 14)} Export This Quiz Questions
                     </button>
                 </div>
                 
                 <!-- This Course Section -->
                 <div style="flex: 1; min-width: 200px;">
                     <h5 style="margin: 0 0 8px 0; color: #4CAF50; font-size: 14px; display: flex; align-items: center; gap: 6px;">
-                        🏦 This Course
+                        ${QuizBankIcons.svg('book-open', 16)}
+                        This Course (Everyone)
                     </h5>
                     <div class="status-item">
                         <span class="status-label">Known Questions:</span>
@@ -1504,6 +1639,10 @@ class EnhancedQuizLoader {
                         <span class="status-value" style="color: #F44336;">${kbStats.lowConfidence}</span>
                     </div>
                     <button id="export-course-btn" style="
+                        display: inline-flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 6px;
                         width: 100%;
                         background: linear-gradient(135deg, #4CAF50, #45a049);
                         color: white;
@@ -1517,7 +1656,7 @@ class EnhancedQuizLoader {
                         margin-top: 10px;
                     " onmouseover="this.style.opacity='0.9';" 
                        onmouseout="this.style.opacity='1';">
-                        📥 Export This Course Questions
+                        ${QuizBankIcons.svg('download', 14)} Export This Course Questions
                     </button>
                 </div>
             </div>
@@ -1525,84 +1664,29 @@ class EnhancedQuizLoader {
             <!-- Export Filters -->
             <div style="margin-bottom: 16px; padding: 10px; background: #f8f9fa; border-radius: 8px; border: 1px solid #e0e0e0;">
                 <label style="display: block; font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600;">
-                    📚 Export Filter:
+                    ${QuizBankIcons.svg('list-filter', 14)} Export Filter:
                 </label>
                 <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                     <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer;">
                         <input type="checkbox" id="filter-correct" checked style="cursor: pointer; width: 13px; height: 13px;">
-                        <span>✅ Correct</span>
+                        <span>${QuizBankIcons.svg('circle-check', 14)} Correct</span>
                     </label>
                     <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer;">
                         <input type="checkbox" id="filter-wrong" checked style="cursor: pointer; width: 13px; height: 13px;">
-                        <span>🚫 Wrong</span>
+                        <span>${QuizBankIcons.svg('circle-x', 14)} Wrong</span>
                     </label>
                     <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer;">
                         <input type="checkbox" id="filter-new" checked style="cursor: pointer; width: 13px; height: 13px;">
-                        <span>✨ New/Partial/Unknown</span>
+                        <span>${QuizBankIcons.svg('sparkles', 14)} New/Partial/Unknown</span>
                     </label>
-                </div>
-            </div>
-
-            <!-- AI Source Material Context Section -->
-            <div id="panel-ai-context-section" style="display: ${this.aiMode ? 'block' : 'none'}; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #eee;">
-                <h5 style="margin: 0 0 8px 0; color: #ff9800; font-size: 14px; display: flex; align-items: center; gap: 6px;">
-                    🧠 AI Source Material
-                </h5>
-                <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-                    <div style="flex: 1; min-width: 0;">
-                        <select id="panel-ai-context-course" style="
-                            width: 100%;
-                            padding: 6px;
-                            border-radius: 6px;
-                            border: 1px solid #ccc;
-                            font-size: 11px;
-                            background: white;
-                            color: #333;
-                            cursor: pointer;
-                        ">
-                            <option value="">General knowledge (no material)</option>
-                        </select>
-                    </div>
-                    <div id="panel-ai-context-module-container" style="display: none; flex: 1; min-width: 0;">
-                        <select id="panel-ai-context-module" style="
-                            width: 100%;
-                            padding: 6px;
-                            border-radius: 6px;
-                            border: 1px solid #ccc;
-                            font-size: 11px;
-                            background: white;
-                            color: #333;
-                            cursor: pointer;
-                        ">
-                            <option value="">Add module...</option>
-                        </select>
-                    </div>
-                </div>
-                <!-- Selected Module Badges -->
-                <div id="panel-ai-context-module-badges" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;"></div>
-                <div id="panel-ai-context-hint" style="font-size: 10px; color: #666; font-style: italic;">
-                    Loading course materials...
-                </div>
-
-                <!-- Own Uploads Section -->
-                <div style="border-top: 1px dashed #cbd5e1; padding-top: 10px; margin-top: 10px;">
-                    <h6 style="margin: 0 0 6px 0; color: #475569; font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: space-between;">
-                        <span>📁 Own Uploads (PDF Notes)</span>
-                        <label style="cursor: pointer; color: #2196F3; font-weight: bold; font-size: 11px; display: flex; align-items: center; gap: 4px; margin: 0;">
-                            📤 Upload PDF
-                            <input type="file" id="panel-own-uploads-input" multiple accept=".pdf" style="display: none;">
-                        </label>
-                    </h6>
-                    <div id="panel-own-uploads-list" style="max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding-right: 4px; margin-top: 6px;">
-                        <!-- Files will be listed here -->
-                    </div>
                 </div>
             </div>
 
             <!-- QuizBank Vault Section -->
             <div style="margin-bottom: 16px;">
                 <h5 style="margin: 0 0 8px 0; color: #9C27B0; font-size: 14px; display: flex; align-items: center; gap: 6px;">
-                    🏦 QuizBank Vault
+                    ${QuizBankIcons.svg('users', 16)}
+                    QuizBank Vault (Everyone)
                 </h5>
                 <div class="status-item">
                     <span class="status-label">Registered Questions:</span>
@@ -1625,12 +1709,12 @@ class EnhancedQuizLoader {
                 font-size: 13px;
                 box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
             ">
-                <span>🆕</span>
+                <span>${QuizBankIcons.svg('sparkles', 16)}</span>
                 <span>New Update Available</span>
             </a>
 
             <div style="padding-top: 8px; font-size: 11px; color: #666; text-align: center; border-top: 1px solid #eee;">
-                QuizBank Active ✨ <span style="color: #999;">v${browser.runtime.getManifest().version}</span>
+                QuizBank Active ${QuizBankIcons.svg('sparkles', 12)} <span style="color: #999;">v${browser.runtime.getManifest().version}</span>
             </div>
                             </div>
         `
@@ -1651,251 +1735,6 @@ class EnhancedQuizLoader {
       })
     }
 
-    // Setup AI Context Picker on the panel (async)
-    (async () => {
-      const courseSelect = document.getElementById('panel-ai-context-course')
-      const moduleSelect = document.getElementById('panel-ai-context-module')
-      const moduleContainer = document.getElementById('panel-ai-context-module-container')
-      const hint = document.getElementById('panel-ai-context-hint')
-
-      if (!courseSelect || !moduleSelect) return
-      if (!this.aiMode) return
-
-      let catalog = []
-
-      try {
-        const deviceId = await this.dbManager.getDeviceId()
-        const response = await quizBankApiRequest(`/api/materials?deviceId=${encodeURIComponent(deviceId)}`)
-        catalog = (response && response.ok && Array.isArray(response.courses)) ? response.courses : []
-      } catch (e) {
-        this.logger.error('Error fetching materials catalog:', e)
-      }
-
-      if (catalog.length === 0) {
-        hint.textContent = 'No course materials available yet.'
-        return
-      }
-
-      // Populate courses
-      courseSelect.innerHTML = '<option value="">General knowledge (no material)</option>' +
-        catalog.map(item => `<option value="${item.course}">${item.course}</option>`).join('')
-
-      // Restore saved selection
-      const saved = await browser.storage.local.get(['quizbank_ai_context'])
-      const savedContext = saved.quizbank_ai_context || { course: '', module: '' }
-
-      const badgesContainer = document.getElementById('panel-ai-context-module-badges')
-      let selectedModules = []
-
-      if (savedContext.module) {
-        selectedModules = savedContext.module.split(',').map(m => m.trim()).filter(Boolean)
-      }
-
-      const persist = () => {
-        browser.storage.local.set({
-          quizbank_ai_context: {
-            course: courseSelect.value,
-            module: selectedModules.join(',')
-          }
-        })
-      }
-
-      const renderModuleBadges = (course) => {
-        if (!badgesContainer) return
-        badgesContainer.innerHTML = ''
-
-        selectedModules.forEach(mod => {
-          const badge = document.createElement('span')
-          badge.style.cssText = `
-            background: #f1f5f9;
-            border: 1px solid #cbd5e1;
-            border-radius: 4px;
-            padding: 2px 6px;
-            font-size: 10px;
-            color: #475569;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            user-select: none;
-          `
-          badge.innerHTML = `
-            Module ${mod}
-            <span class="remove-module" data-module="${mod}" style="cursor: pointer; font-weight: bold; color: #94a3b8; line-height: 1;">✕</span>
-          `
-
-          badge.querySelector('.remove-module').addEventListener('click', (e) => {
-            const modToRemove = e.target.getAttribute('data-module')
-            selectedModules = selectedModules.filter(m => m !== modToRemove)
-            renderModuleBadges(course)
-            renderModuleDropdown(course)
-            persist()
-          })
-
-          badgesContainer.appendChild(badge)
-        })
-      }
-
-      const renderModuleDropdown = (course) => {
-        const entry = catalog.find(item => item.course === course)
-        const allModules = entry ? entry.modules : []
-        const availableModules = allModules.filter(m => !selectedModules.includes(m))
-
-        moduleSelect.innerHTML = '<option value="">Add module...</option>' +
-          availableModules.map(module => `<option value="${module}">Module ${module}</option>`).join('')
-
-        moduleSelect.value = ''
-        moduleContainer.style.display = (course && allModules.length > 0) ? 'block' : 'none'
-      }
-
-      if (savedContext.course) {
-        courseSelect.value = savedContext.course
-        renderModuleDropdown(savedContext.course)
-        renderModuleBadges(savedContext.course)
-        hint.textContent = 'The AI will use this material as context.'
-      } else {
-        hint.textContent = 'Pick a course to have the AI use your uploaded material.'
-      }
-
-      courseSelect.addEventListener('change', () => {
-        selectedModules = []
-        renderModuleDropdown(courseSelect.value)
-        renderModuleBadges(courseSelect.value)
-        hint.textContent = courseSelect.value
-          ? 'The AI will use this material as context.'
-          : 'Pick a course to have the AI use your uploaded material.'
-        persist()
-      })
-
-      moduleSelect.addEventListener('change', () => {
-        const chosen = moduleSelect.value
-        if (chosen) {
-          if (!selectedModules.includes(chosen)) {
-            selectedModules.push(chosen)
-            selectedModules.sort()
-          }
-          renderModuleDropdown(courseSelect.value)
-          renderModuleBadges(courseSelect.value)
-          persist()
-        }
-      })
-
-      // --- Local Notes Own Uploads Logic ---
-      const fileInput = document.getElementById('panel-own-uploads-input')
-      const uploadsList = document.getElementById('panel-own-uploads-list')
-
-      const loadOwnUploads = async () => {
-        if (!uploadsList) return
-        
-        try {
-          const deviceId = await this.dbManager.getDeviceId()
-          
-          uploadsList.innerHTML = '<div style="font-size: 10px; color: #94a3b8; font-style: italic; text-align: center; padding: 6px 0;">Loading notes...</div>'
-
-          const response = await quizBankApiRequest(`/api/user-notes?deviceId=${encodeURIComponent(deviceId)}`)
-
-          const files = (response && response.ok && Array.isArray(response.notes)) ? response.notes : []
-          await browser.storage.local.set({ quizbank_user_notes: files })
-          const stored = await browser.storage.local.get(['quizbank_selected_user_files'])
-          const selectedIds = (stored.quizbank_selected_user_files || []).map(Number)
-
-          if (files.length === 0) {
-            uploadsList.innerHTML = '<div style="font-size: 10px; color: #94a3b8; font-style: italic; text-align: center; padding: 6px 0;">No uploads yet.</div>'
-            return
-          }
-
-          uploadsList.innerHTML = files.map(file => {
-            const isChecked = selectedIds.includes(Number(file.id)) ? 'checked' : ''
-            return `
-              <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 6px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; font-size: 11px; margin-bottom: 2px;">
-                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; flex: 1; min-width: 0; margin: 0; font-weight: normal; color: #334155;">
-                  <input type="checkbox" class="own-upload-checkbox" data-id="${file.id}" ${isChecked} style="cursor: pointer; width: 13px; height: 13px; margin: 0;">
-                  <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;" title="${file.filename}">${file.filename}</span>
-                </label>
-                <span class="delete-own-upload" data-id="${file.id}" style="cursor: pointer; font-size: 12px; color: #94a3b8; transition: color 0.2s;" onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='#94a3b8'">🗑️</span>
-              </div>
-            `
-          }).join('')
-
-          // Add change listeners to checkboxes
-          uploadsList.querySelectorAll('.own-upload-checkbox').forEach(cb => {
-            cb.addEventListener('change', async () => {
-              const currentSelected = Array.from(uploadsList.querySelectorAll('.own-upload-checkbox:checked'))
-                .map(el => Number(el.getAttribute('data-id')))
-              await browser.storage.local.set({ quizbank_selected_user_files: currentSelected })
-            })
-          })
-
-          // Add click listeners to delete buttons
-          uploadsList.querySelectorAll('.delete-own-upload').forEach(btn => {
-            btn.addEventListener('click', async () => {
-              const id = Number(btn.getAttribute('data-id'))
-              btn.innerHTML = '⏳'
-              
-              const delResponse = await quizBankApiRequest(
-                `/api/user-notes/${id}?deviceId=${encodeURIComponent(deviceId)}`,
-                { method: 'DELETE' }
-              )
-
-              if (delResponse && delResponse.ok) {
-                const storedDelete = await browser.storage.local.get(['quizbank_selected_user_files'])
-                const updatedSelected = (storedDelete.quizbank_selected_user_files || []).filter(sid => Number(sid) !== id)
-                await browser.storage.local.set({ quizbank_selected_user_files: updatedSelected })
-              }
-              loadOwnUploads()
-            })
-          })
-        } catch (e) {
-          this.logger.error('Error loading own uploads:', e)
-          uploadsList.innerHTML = '<div style="font-size: 10px; color: #f43f5e; font-style: italic; text-align: center; padding: 6px 0;">Error loading notes.</div>'
-        }
-      }
-
-      if (fileInput) {
-        fileInput.addEventListener('change', async (e) => {
-          const files = Array.from(e.target.files)
-          if (files.length === 0) return
-
-          try {
-            const deviceId = await this.dbManager.getDeviceId()
-            
-            const originalHint = hint.textContent
-            hint.innerHTML = '<span style="color: #2196F3; font-weight: 500;">⏳ Uploading and indexing notes...</span>'
-
-            const storedUpload = await browser.storage.local.get(['quizbank_selected_user_files'])
-            const existingSelected = storedUpload.quizbank_selected_user_files || []
-
-            for (const file of files) {
-              const formData = new FormData()
-              formData.append('deviceId', deviceId)
-              formData.append('file', file, file.name)
-
-              const upResponse = await quizBankApiRequest('/api/user-notes', {
-                method: 'POST',
-                body: formData
-              })
-
-              if (upResponse && upResponse.ok && upResponse.note) {
-                existingSelected.push(Number(upResponse.note.id))
-              }
-            }
-
-            await browser.storage.local.set({
-              quizbank_selected_user_files: existingSelected
-            })
-
-            hint.textContent = originalHint
-          } catch (e) {
-            this.logger.error('Error uploading note:', e)
-          }
-
-          fileInput.value = ''
-          loadOwnUploads()
-        })
-      }
-
-      loadOwnUploads()
-    })()
-
     // Get course name for exports
     const courseName = document.title || `Course ${courseId}`
 
@@ -1905,28 +1744,35 @@ class EnhancedQuizLoader {
       includeWrong: document.getElementById('filter-wrong')?.checked ?? true,
       includeNew: document.getElementById('filter-new')?.checked ?? true
     })
+    const setExportButtonContent = (button, iconName, label) => {
+      const iconClass = iconName === 'loader-circle' ? 'qb-icon-spin' : ''
+      button.replaceChildren(
+        QuizBankIcons.create(iconName, 14, iconClass),
+        document.createTextNode(label)
+      )
+    }
 
     // Quiz export button
     const quizExportBtn = document.getElementById('export-quiz-btn')
     if (quizExportBtn) {
       quizExportBtn.addEventListener('click', async () => {
         quizExportBtn.disabled = true
-        quizExportBtn.innerHTML = '⏳ Downloading...'
+        setExportButtonContent(quizExportBtn, 'loader-circle', 'Downloading...')
 
         try {
           const filterConfig = getFilterConfig()
           await this.questionCompiler.exportAsHTML(quizId, courseId, filterConfig)
           this.logger.info(`✅ Quiz questions exported successfully`)
-          quizExportBtn.innerHTML = '✅ Downloaded!'
+          setExportButtonContent(quizExportBtn, 'circle-check', 'Downloaded!')
           setTimeout(() => {
-            quizExportBtn.innerHTML = '📥 Export This Quiz Questions'
+            setExportButtonContent(quizExportBtn, 'download', 'Export This Quiz Questions')
           }, 2000)
         } catch (error) {
           this.logger.error('Quiz export failed:', error)
-          quizExportBtn.innerHTML = `❌ ${error.message}`
+          setExportButtonContent(quizExportBtn, 'circle-x', error.message)
           quizExportBtn.style.background = '#f44336'
           setTimeout(() => {
-            quizExportBtn.innerHTML = '📥 Export This Quiz Questions'
+            setExportButtonContent(quizExportBtn, 'download', 'Export This Quiz Questions')
             quizExportBtn.style.background = 'linear-gradient(135deg, #2196F3, #1976D2)'
           }, 3000)
         } finally {
@@ -1940,22 +1786,22 @@ class EnhancedQuizLoader {
     if (courseExportBtn) {
       courseExportBtn.addEventListener('click', async () => {
         courseExportBtn.disabled = true
-        courseExportBtn.innerHTML = '⏳ Downloading...'
+        setExportButtonContent(courseExportBtn, 'loader-circle', 'Downloading...')
 
         try {
           const filterConfig = getFilterConfig()
           await this.questionCompiler.exportCourseAsHTML(courseId, courseName, filterConfig)
           this.logger.info(`✅ Course questions exported successfully`)
-          courseExportBtn.innerHTML = '✅ Downloaded!'
+          setExportButtonContent(courseExportBtn, 'circle-check', 'Downloaded!')
           setTimeout(() => {
-            courseExportBtn.innerHTML = '📥 Export This Course Questions'
+            setExportButtonContent(courseExportBtn, 'download', 'Export This Course Questions')
           }, 2000)
         } catch (error) {
           this.logger.error('Course export failed:', error)
-          courseExportBtn.innerHTML = `❌ ${error.message}`
+          setExportButtonContent(courseExportBtn, 'circle-x', error.message)
           courseExportBtn.style.background = '#f44336'
           setTimeout(() => {
-            courseExportBtn.innerHTML = '📥 Export This Course Questions'
+            setExportButtonContent(courseExportBtn, 'download', 'Export This Course Questions')
             courseExportBtn.style.background = 'linear-gradient(135deg, #4CAF50, #45a049)'
           }, 3000)
         } finally {
@@ -2253,15 +2099,59 @@ class EnhancedDisplayer {
   constructor(logger, stealthMode = false) {
     this.logger = logger
     this.stealthMode = stealthMode
+    this.selectionGeneration = autoSelectionGeneration
   }
 
-  displayMultipleChoice(question, questionId, autoSelect = false) {
+  resolveChoiceInput(element) {
+    return element?.matches?.('input[type="radio"], input[type="checkbox"]')
+      ? element
+      : element?.querySelector?.('input[type="radio"], input[type="checkbox"]')
+        || element?.closest?.('.answer')?.querySelector('input[type="radio"], input[type="checkbox"]')
+  }
+
+  markAutoSelected(input) {
+    input.classList.add('auto-selected')
+    input.setAttribute('data-quizbank-auto-selected', 'true')
+  }
+
+  async selectChoiceInputs(elements, delayPromise = null) {
+    const inputs = Array.from(
+      new Set(elements.map(element => this.resolveChoiceInput(element)))
+    ).filter(input => input && !input.disabled)
+    const pendingInputs = inputs.filter(input => !input.checked)
+
+    if (pendingInputs.length > 0) {
+      await (delayPromise || createAutoSelectionDelay(this.logger))
+
+      if (this.selectionGeneration !== autoSelectionGeneration) return false
+
+      for (const input of pendingInputs) {
+        if (input.isConnected && !input.checked) input.click()
+      }
+    }
+
+    for (const input of inputs) {
+      if (input.checked) this.markAutoSelected(input)
+    }
+
+    return inputs.length > 0 && inputs.every(input => input.checked)
+  }
+
+  async selectChoiceInput(element, delayPromise = null) {
+    return this.selectChoiceInputs([element], delayPromise)
+  }
+
+  async displayMultipleChoice(question, questionId, autoSelect = false) {
     this.logger.info(`Displaying multiple choice for question ${questionId}`)
 
     if (!question) return
 
     const bestAnswer = question.bestAnswer
     if (!bestAnswer) return
+
+    const selectionDelay = autoSelect && bestAnswer.correct === Correct.TRUE
+      ? createAutoSelectionDelay(this.logger)
+      : null
 
     // Use the original working approach: direct element ID lookup
     const answerId = `question_${questionId}_answer_${bestAnswer.text}`
@@ -2270,7 +2160,6 @@ class EnhancedDisplayer {
 
     if (el) {
       this.logger.info(`✅ Found element for question ${questionId}`)
-      // Show badge for correct or wrong answer, no auto-selection
       if (bestAnswer.correct === Correct.TRUE) {
         if (this.stealthMode) {
           this.applyStealthDividerFade(el)
@@ -2300,14 +2189,27 @@ class EnhancedDisplayer {
     if (!this.stealthMode) {
       this.highlightAllWrongAnswers(question, questionId)
     }
+
+    if (autoSelect && bestAnswer.correct === Correct.TRUE && el) {
+      await this.selectChoiceInput(el, selectionDelay)
+    }
   }
 
   /**
    * Display a Gemini AI answer. Matches by option text (AI has no Canvas answer ids).
    */
-  displayAIAnswer(question, questionId, questionType) {
+  async displayAIAnswer(question, questionId, questionType, autoSelect = false, selectionDelay = null) {
     const answerText = question.bestAnswer?.text
     if (!answerText) return
+
+    const isChoiceQuestion = [
+      QuestionTypes.MULTIPLE_CHOICE,
+      QuestionTypes.TRUE_FALSE,
+      QuestionTypes.MULTIPLE_ANSWER
+    ].includes(questionType)
+    if (autoSelect && isChoiceQuestion && !selectionDelay) {
+      selectionDelay = createAutoSelectionDelay(this.logger)
+    }
 
     // Clean up any existing AI badges for this question to prevent duplicates on rerun
     const questionEl = document.getElementById(`question_${questionId}`)
@@ -2347,6 +2249,9 @@ class EnhancedDisplayer {
         if (!this.stealthMode) {
           this.highlightAllWrongAnswers(question, questionId)
         }
+        if (autoSelect) {
+          await this.selectChoiceInputs(matchedLabels, selectionDelay)
+        }
         break
       }
 
@@ -2366,6 +2271,9 @@ class EnhancedDisplayer {
         if (!this.stealthMode) {
           this.highlightAllWrongAnswers(question, questionId)
         }
+        if (autoSelect) {
+          await this.selectChoiceInputs(Array.from(matchedLabels), selectionDelay)
+        }
         break
       }
 
@@ -2376,7 +2284,7 @@ class EnhancedDisplayer {
         if (textarea) {
           textarea.placeholder = `AI suggestion: ${answerText.substring(0, 200)}`
           textarea.style.borderColor = '#9C27B0'
-          this.highlightAIAnswerWithBadge(textarea, '🤖 AI suggestion')
+          this.highlightAIAnswerWithBadge(textarea, 'AI suggestion')
         }
         break
       }
@@ -2388,7 +2296,7 @@ class EnhancedDisplayer {
         if (input) {
           input.placeholder = `AI answer: ${answerText}`
           input.style.borderColor = '#9C27B0'
-          this.highlightAIAnswerWithBadge(input, `🤖 ${answerText}`)
+          this.highlightAIAnswerWithBadge(input, answerText)
         }
       }
     }
@@ -2400,7 +2308,7 @@ class EnhancedDisplayer {
 
     const iconSpan = document.createElement('span')
     iconSpan.className = 'badge-icon'
-    iconSpan.textContent = '🤖'
+    iconSpan.appendChild(QuizBankIcons.create('bot', 12))
 
     const textSpan = document.createElement('span')
     textSpan.className = 'badge-text'
@@ -2443,19 +2351,19 @@ class EnhancedDisplayer {
         } else {
           input.placeholder = `Correct answer: ${bestAnswer.text}`
           input.style.borderColor = '#4CAF50'
-          this.highlightCorrectAnswerWithBadge(input, `✅ ${bestAnswer.text}`)
+          this.highlightCorrectAnswerWithBadge(input, bestAnswer.text)
         }
       } else if (bestAnswer.correct === Correct.FALSE) {
         if (!this.stealthMode) {
           input.placeholder = `Previously wrong: ${bestAnswer.text}`
           input.style.borderColor = '#ff5722'
-          this.highlightWrongAnswerWithBadge(input, `🚫 ${bestAnswer.text}`)
+          this.highlightWrongAnswerWithBadge(input, bestAnswer.text)
         }
       }
     }
   }
 
-  displayMultipleAnswer(question, questionId, autoSelect = false) {
+  async displayMultipleAnswer(question, questionId, autoSelect = false) {
     this.logger.info(`Displaying multiple answer for question ${questionId}`)
 
     const bestAnswer = question.bestAnswer
@@ -2464,6 +2372,10 @@ class EnhancedDisplayer {
     const isCorrect = bestAnswer.correct === Correct.TRUE
     // Stealth only ever marks correct answers (never wrong).
     if (this.stealthMode && !isCorrect) return
+
+    const selectionDelay = autoSelect && isCorrect
+      ? createAutoSelectionDelay(this.logger)
+      : null
 
     // Resolve the selected option inputs.
     const selectedInputs = this.resolveMultipleAnswerInputs(bestAnswer, questionId)
@@ -2485,6 +2397,10 @@ class EnhancedDisplayer {
     if (!this.stealthMode) {
       this.highlightAllWrongAnswers(question, questionId)
     }
+
+    if (autoSelect && isCorrect) {
+      await this.selectChoiceInputs(selectedInputs, selectionDelay)
+    }
   }
 
   /**
@@ -2503,10 +2419,16 @@ class EnhancedDisplayer {
         .map(([key]) => key.replace(/^answer_/, ''))
 
       for (const answerId of selectedIds) {
-        const input = document.querySelector(
-          `#question_${questionId} input[value="${answerId}"]`
+        const input = document.getElementById(
+          `question_${questionId}_answer_${answerId}`
         )
-        if (input) inputs.push(input)
+        const questionElement = document.getElementById(`question_${questionId}`)
+        if (
+          input?.type === 'checkbox' &&
+          questionElement?.contains(input)
+        ) {
+          inputs.push(input)
+        }
       }
       if (inputs.length > 0) return inputs
     }
@@ -2518,7 +2440,7 @@ class EnhancedDisplayer {
       for (const label of labels) {
         const labelText = label.textContent.trim()
         if (answers.some(answer => labelText.includes(answer) || answer.includes(labelText))) {
-          const input = label.closest('.answer')?.querySelector('input')
+          const input = label.closest('.answer')?.querySelector('input[type="checkbox"]')
           if (input) inputs.push(input)
         }
       }
@@ -2542,7 +2464,7 @@ class EnhancedDisplayer {
         } else {
           textarea.placeholder = `Correct answer: ${bestAnswer.text.substring(0, 100)}...`
           textarea.style.borderColor = '#4CAF50'
-          this.highlightCorrectAnswerWithBadge(textarea, `✅ Previous answer`)
+          this.highlightCorrectAnswerWithBadge(textarea, 'Previous answer')
         }
       } else if (bestAnswer.correct === Correct.FALSE) {
         if (!this.stealthMode) {
@@ -2551,7 +2473,7 @@ class EnhancedDisplayer {
             100
           )}...`
           textarea.style.borderColor = '#ff5722'
-          this.highlightWrongAnswerWithBadge(textarea, `🚫 Previous attempt`)
+          this.highlightWrongAnswerWithBadge(textarea, 'Previous attempt')
         }
       }
     }
@@ -2597,12 +2519,12 @@ class EnhancedDisplayer {
           if (bestAnswer.correct === Correct.TRUE) {
             if (!this.stealthMode) {
               select.style.borderColor = '#4CAF50'
-              this.highlightCorrectAnswerWithBadge(select, '✅ Previous answer')
+              this.highlightCorrectAnswerWithBadge(select, 'Previous answer')
             }
           } else if (bestAnswer.correct === Correct.FALSE) {
             if (!this.stealthMode) {
               select.style.borderColor = '#ff5722'
-              this.highlightWrongAnswerWithBadge(select, '🚫 Previous attempt')
+              this.highlightWrongAnswerWithBadge(select, 'Previous attempt')
             }
           }
         }
@@ -2626,12 +2548,10 @@ class EnhancedDisplayer {
     badge.className = 'correct-answer-badge'
 
     const badgeText = customMessage || 'Correct'
-    const badgeIcon = '✅'
-
     // Safe HTML creation to prevent XSS
     const iconSpan = document.createElement('span')
     iconSpan.className = 'badge-icon'
-    iconSpan.textContent = badgeIcon
+    iconSpan.appendChild(QuizBankIcons.create('circle-check', 12))
 
     const textSpan = document.createElement('span')
     textSpan.className = 'badge-text'
@@ -2664,12 +2584,10 @@ class EnhancedDisplayer {
     badge.className = 'wrong-answer-badge'
 
     const badgeText = customMessage || 'Previously wrong'
-    const badgeIcon = '🚫'
-
     // Safe HTML creation to prevent XSS
     const iconSpan = document.createElement('span')
     iconSpan.className = 'badge-icon'
-    iconSpan.textContent = badgeIcon
+    iconSpan.appendChild(QuizBankIcons.create('circle-x', 12))
 
     const textSpan = document.createElement('span')
     textSpan.className = 'badge-text'
@@ -2698,9 +2616,29 @@ class EnhancedDisplayer {
   }
 
   highlightAllWrongAnswers(question, questionId) {
-    // Use the same direct ID approach for wrong answers
     if (question.wrongAnswers) {
       for (const wrongAnswer of question.wrongAnswers) {
+        const questionElement = document.getElementById(`question_${questionId}`)
+        const hasCheckboxChoices = questionElement?.querySelector('input[type="checkbox"]')
+        const answerFields = wrongAnswer.dynamicFields || wrongAnswer.answer_fields
+
+        if (hasCheckboxChoices && answerFields) {
+          const wrongInputs = this.resolveMultipleAnswerInputs(
+            {
+              dynamicFields: answerFields,
+              text: wrongAnswer.answer_text || wrongAnswer.text
+            },
+            questionId
+          )
+
+          for (const input of wrongInputs) {
+            this.highlightWrongAnswerWithBadge(input)
+          }
+
+          if (wrongInputs.length > 0) continue
+        }
+
+        // Keep ID-based behavior for non-checkbox question types.
         const wrongAnswerId = `question_${questionId}_answer_${wrongAnswer.answer_text || wrongAnswer.text
           }`
         const wrongEl = document.getElementById(wrongAnswerId)
@@ -2940,7 +2878,7 @@ function showActivationRequiredPanel() {
 
   panel.innerHTML = `
     <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
-      <h4 style="margin: 0; color: #333; font-size: 16px;">🏦 QuizBank</h4>
+      <h4 style="margin: 0; color: #333; font-size: 16px; display: flex; align-items: center; gap: 6px;">${QuizBankIcons.svg('landmark', 16)} QuizBank</h4>
       <button id="close-activation-panel" style="
         background: none;
         border: none;
@@ -3117,6 +3055,23 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     // Re-run the main function to apply/remove AI answers
+    enhancedMain().catch(error => {
+      logger.error('QuizBank re-run failed:', error)
+    })
+
+    sendResponse({ success: true })
+    return true
+  }
+
+  if (message.type === `${prefix}-set-auto-select`) {
+    const logger = BrowserLogger.getInstance()
+    logger.info(`Auto-select answers toggled to ${message.enabled ? 'ON' : 'OFF'} - re-running...`)
+    if (currentLoader) {
+      currentLoader.abortAllAIRequests()
+      currentLoader.autoSelectAnswers = message.enabled === true
+    }
+
+    // Re-run QuizBank to apply or remove automatic selections.
     enhancedMain().catch(error => {
       logger.error('QuizBank re-run failed:', error)
     })

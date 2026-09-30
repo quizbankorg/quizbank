@@ -3,7 +3,7 @@
   "manifest_version": 3,
   "name": "QuizBank",
   "short_name": "QuizBank",
-  "version": "2.2.6",
+  "version": "2.2.8",
   "description": "Automatically load correct answers from a knowledge base built across all quizzes in all courses.",
   "icons": {
     "16": "assets/img/icon16.png",
@@ -20,6 +20,7 @@
         "quiz-bank/browser-polyfill.min.js",
         "database/supabase.min.js",
         "database/supabase-manager.js",
+        "quiz-bank/icons.js",
         "quiz-bank/compileQuestions.js",
         "quiz-bank/index.js",
         "quiz-bank/clipboardAuto.js"
