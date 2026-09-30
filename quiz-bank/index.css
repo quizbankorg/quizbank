@@ -162,7 +162,9 @@ body.quizbank-stealth .quizbank-auto-countdown {
 }
 
 #review-revyard-btn:focus,
-#review-revyard-btn:focus-visible {
+#review-revyard-btn:focus-visible,
+#panel-update-btn:focus,
+#panel-update-btn:focus-visible {
   outline: none !important;
   box-shadow: none !important;
 }
