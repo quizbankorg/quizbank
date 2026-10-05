@@ -2406,13 +2406,15 @@ class EnhancedDisplayer {
       }
 
       default: {
-        // Fill-in/numerical have no divider tell - stealth shows nothing.
-        if (this.stealthMode) break
         const input = document.querySelector(`input[name="question_${questionId}"]`)
         if (input) {
-          input.placeholder = `AI answer: ${answerText}`
-          input.style.borderColor = '#9C27B0'
-          this.highlightAIAnswerWithBadge(input, answerText)
+          if (this.stealthMode) {
+            this.fillTextInput(input, answerText)
+          } else {
+            input.placeholder = `AI answer: ${answerText}`
+            input.style.borderColor = '#9C27B0'
+            this.highlightAIAnswerWithBadge(input, answerText)
+          }
         }
       }
     }
@@ -2462,10 +2464,10 @@ class EnhancedDisplayer {
 
     const input = document.querySelector(`input[name="question_${questionId}"]`)
     if (input) {
-      // Show badge for correct or wrong answer, no auto-fill
+      // Show correct or wrong answer without auto-fill outside stealth mode.
       if (bestAnswer.correct === Correct.TRUE) {
         if (this.stealthMode) {
-          input.placeholder = this.applyStealthItalicsToText(bestAnswer.text)
+          this.fillTextInput(input, bestAnswer.text)
         } else {
           input.placeholder = `Correct answer: ${bestAnswer.text}`
           input.style.borderColor = '#4CAF50'
@@ -2479,6 +2481,14 @@ class EnhancedDisplayer {
         }
       }
     }
+  }
+
+  fillTextInput(input, answerText) {
+    if (!input || !answerText || input.value.trim()) return
+
+    input.value = answerText
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new Event('change', { bubbles: true }))
   }
 
   async displayMultipleAnswer(question, questionId, autoSelect = false) {
