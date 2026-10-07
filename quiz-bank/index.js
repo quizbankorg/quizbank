@@ -1150,11 +1150,10 @@ class EnhancedQuizLoader {
 
     // Multiple questions on page: only over a question element. Right-clicking a
     // question suppresses its menu whether or not AI is needed; acts only if pending.
-    const container = event.target?.closest?.('.display_question, .question')
-    if (!container) return // not on a question - let the native menu show
+    const questionId = this.getQuestionIdFromEvent(event)
+    if (!questionId) return // not on a question - let the native menu show
 
     event.preventDefault()
-    const questionId = container.id?.replace('question_', '')
     if (questionId && this.aiRegistry.has(questionId)) {
       this.triggerAI(questionId)
     }
@@ -1175,14 +1174,19 @@ class EnhancedQuizLoader {
       return
     }
 
-    const container = event.target?.closest?.('.display_question, .question')
-    if (!container) return
+    const questionId = this.getQuestionIdFromEvent(event)
+    if (!questionId) return
 
-    const questionId = container.id?.replace('question_', '')
     if (questionId && this.aiRegistry.has(questionId)) {
       event.preventDefault()
       this.triggerAI(questionId)
     }
+  }
+
+  getQuestionIdFromEvent(event) {
+    const container = event.target?.closest?.('.display_question, .question')
+    const match = container?.id?.match(/^question_(\d+)$/)
+    return match ? Number(match[1]) : null
   }
 
   /**
