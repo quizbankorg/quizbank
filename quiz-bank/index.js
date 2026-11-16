@@ -36,8 +36,8 @@ const Correct = {
   PARTIAL: 'partial'
 }
 
-const AUTO_SELECT_DELAY_MIN_MS = 10_000
-const AUTO_SELECT_DELAY_MAX_MS = 20_000
+const AUTO_SELECT_DELAY_MIN_MS = 7_000
+const AUTO_SELECT_DELAY_MAX_MS = 10_000
 const AUTO_NAVIGATION_DELAY_MS = 500
 let autoSelectionGeneration = 0
 
