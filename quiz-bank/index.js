@@ -118,40 +118,6 @@ function createAutoNavigationDelay(logger) {
 // access. The extension never handles the key.
 
 /**
- * Build a type-aware prompt for Gemini from a question.
- */
-function buildGeminiPrompt(questionInfo, quizContext) {
-  const { questionText, questionType, options } = questionInfo
-  const hasOptions = Array.isArray(options) && options.length > 0
-
-  let instruction
-  switch (questionType) {
-    case QuestionTypes.MULTIPLE_CHOICE:
-    case QuestionTypes.TRUE_FALSE:
-      instruction = 'Choose the single correct option. Respond with ONLY the exact text of the correct option, nothing else.'
-      break
-    case QuestionTypes.MULTIPLE_ANSWER:
-      instruction = 'Choose all correct options. Respond with ONLY the exact text of each correct option, separated by " | ", nothing else.'
-      break
-    case QuestionTypes.ESSAY_QUESTION:
-      instruction = 'Write a concise, correct answer (2-4 sentences).'
-      break
-    default:
-      instruction = 'Respond with ONLY the correct answer, as short as possible, nothing else.'
-  }
-
-  let prompt = instruction
-  if (quizContext) {
-    prompt += `\n\nThis question is from the quiz/course: "${quizContext}". Use this as subject context.`
-  }
-  prompt += `\n\nQuestion: ${questionText}`
-  if (hasOptions) {
-    prompt += `\n\nOptions:\n${options.map(option => `- ${option}`).join('\n')}`
-  }
-  return prompt
-}
-
-/**
  * Ask Gemini for the answer to a question.
  * Returns the answer text, or null on failure.
  */
@@ -160,11 +126,14 @@ function buildGeminiPrompt(questionInfo, quizContext) {
  * 'ok' | 'failed' | 'aborted'. requestId lets the caller abort the in-flight fetch.
  */
 async function askGemini(questionInfo, quizContext, deviceId, logger, requestId) {
-  const prompt = buildGeminiPrompt(questionInfo, quizContext)
-  logger?.info('🤖 Gemini prompt:', prompt)
-
   const payload = {
-    prompt,
+    question: questionInfo,
+    quiz: {
+      title: quizContext.title,
+      instructions: quizContext.instructions
+    },
+    courseCode: quizContext.courseCode || undefined,
+    canvasHost: location.hostname,
     deviceId,
     requestId
   }
@@ -211,7 +180,7 @@ const directGeminiControllers = new Map()
  * Fetch the Gemini answer from the backend, abortable via abortGeminiRequest.
  * Returns { ok, answer?, aborted?, error? }.
  */
-async function fetchGeminiDirect({ prompt, deviceId, requestId }) {
+async function fetchGeminiDirect({ question, quiz, courseCode, canvasHost, deviceId, requestId }) {
   const controller = new AbortController()
   if (requestId) directGeminiControllers.set(requestId, controller)
 
@@ -220,7 +189,7 @@ async function fetchGeminiDirect({ prompt, deviceId, requestId }) {
       method: 'POST',
       signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, deviceId })
+      body: JSON.stringify({ question, quiz, deviceId, courseCode, canvasHost })
     })
 
     const data = await response.json().catch(() => ({}))
@@ -267,22 +236,44 @@ function attachAIGlobalListeners() {
   if (aiListenersAttached) return
   aiListenersAttached = true
 
+  // Universal double-action trigger (ignores inputs/textareas so typing & selecting text works)
+  const triggerDouble = (event) => {
+    if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName)) return
+    currentLoader?.handleUniversalDoubleTap(event)
+  }
+
+  // Desktop right-click
   document.addEventListener('contextmenu', (event) => {
     currentLoader?.handleRightClick(event)
   })
 
-  // Mobile: double-tap mirrors right-click (no contextmenu on most touch browsers).
+  // Universal double-click (desktop mouse/trackpad)
+  document.addEventListener('dblclick', (event) => {
+    triggerDouble(event)
+  })
+
+  // Universal double-tap (touchscreens/mobile)
   let lastTapTime = 0
-  let lastTapTarget = null
+  let lastTapX = 0
+  let lastTapY = 0
   document.addEventListener('touchend', (event) => {
+    if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName)) return
+
     const now = Date.now()
-    const target = event.target
-    const isDoubleTap =
-      now - lastTapTime < 350 && lastTapTarget === target
-    lastTapTime = now
-    lastTapTarget = target
+    const touch = event.changedTouches?.[0]
+    const x = touch?.clientX ?? 0
+    const y = touch?.clientY ?? 0
+
+    const timeDiff = now - lastTapTime
+    const dist = Math.hypot(x - lastTapX, y - lastTapY)
+    const isDoubleTap = timeDiff > 0 && timeDiff < 400 && dist < 45
+
+    lastTapTime = isDoubleTap ? 0 : now
+    lastTapX = x
+    lastTapY = y
+
     if (isDoubleTap) {
-      currentLoader?.handleDoubleTap(event)
+      triggerDouble(event)
     }
   })
 
@@ -345,7 +336,7 @@ class EnhancedQuizLoader {
       // validates voucher access - the content script never handles the key.
 
       this.initialized = true
-      this.logger.info('QuizBank initialized with knowledge bank')
+      this.logger.info('QuizBank initialized')
     }
   }
 
@@ -518,8 +509,10 @@ class EnhancedQuizLoader {
         enhancedAnswers[questionId] = {
           source: 'ai_pending',
           aiPending: true,
+          questionLabel: questionInfo.questionLabel,
           questionText: questionInfo.questionText,
           questionType: questionInfo.questionType,
+          selectionMode: questionInfo.selectionMode,
           options: questionInfo.options,
           wrongAnswers: knownWrongAnswers
         }
@@ -531,14 +524,39 @@ class EnhancedQuizLoader {
   }
 
   /**
-   * Extract quiz/course context (title) from the DOM for AI prompts.
-   * Returns a short string, or empty string if nothing useful is found.
+   * Read the visible quiz title and instructions for AI prompts.
    */
-  getQuizContext() {
+  async getQuizContext() {
     const titleElement = document.querySelector('#quiz-title, .quiz-title, h1')
     const quizTitle = titleElement?.textContent.trim()
     const pageTitle = document.title?.trim()
-    return (quizTitle || pageTitle || '').replace(/\s+/g, ' ').trim()
+    const coursePath = location.pathname.match(/^\/courses\/\d+/)?.[0]
+    let courseCode = ''
+    if (coursePath) {
+      try {
+        const response = await fetch(`/api/v1${coursePath}`, {
+          headers: { Accept: 'application/json' },
+          credentials: 'same-origin'
+        })
+        if (response.ok) {
+          const course = await response.json()
+          if (typeof course.course_code === 'string') courseCode = course.course_code.trim()
+        }
+      } catch (error) {
+        this.logger.warn('Canvas course lookup failed:', error.message)
+      }
+    }
+    // Target clean instructions container with sensible fallbacks, avoiding outer page content wrappers (#content)
+    const instructionsElement = document.querySelector(
+      '#quiz-instructions, .quiz_description, .instructions, [data-testid="item-stem"], .group_description, .stimulus_content'
+    )
+    const instructions = instructionsElement?.innerText.trim() || ''
+
+    return {
+      courseCode,
+      title: (quizTitle || pageTitle || '').replace(/\s+/g, ' ').trim(),
+      instructions
+    }
   }
 
   /**
@@ -581,6 +599,13 @@ class EnhancedQuizLoader {
       (questionIndex >= 0 && questionIndex < questionTypeElements.length)
         ? questionTypeElements[questionIndex]?.innerText || 'unknown'
         : 'unknown'
+    const choiceQuestionElement = document.getElementById(`question_${questionId}`)
+    const choiceInput = choiceQuestionElement?.querySelector('input[type="radio"], input[type="checkbox"]')
+    const selectionMode = choiceInput?.type === 'radio'
+      ? 'single'
+      : choiceInput?.type === 'checkbox'
+        ? 'multiple'
+        : null
 
     // Extract options for choice-based questions (incl. multiple-answer, so the
     // AI knows the exact options it must pick from)
@@ -599,7 +624,9 @@ class EnhancedQuizLoader {
     return {
       questionText,
       questionType,
+      selectionMode,
       options,
+      questionLabel: questionElement.closest('.question')?.querySelector('.question_name')?.textContent.trim(),
       canvas_question_id: questionId
     }
   }
@@ -610,7 +637,7 @@ class EnhancedQuizLoader {
   async displayEnhancedAnswers(questions) {
     const questionIds = this.getQuestionIds()
     const questionTypes = document.getElementsByClassName('question_type')
-    const quizContext = this.getQuizContext()
+    const quizContext = await this.getQuizContext()
 
     // Cleanup existing badges/highlights if any
     this.cleanupDOM()
@@ -874,10 +901,12 @@ class EnhancedQuizLoader {
     const questionElement = document.getElementById(
       `question_${questionId}_question_text`
     )
-    if (
-      questionElement &&
-      !questionElement.querySelector('.answer-source-badge')
-    ) {
+    if (questionElement) {
+      const existing = questionElement.querySelector('.answer-source-badge')
+      if (existing) {
+        existing.remove()
+      }
+
       const badge = document.createElement('div')
       badge.className = `answer-source-badge ${source}-source`
 
@@ -1009,19 +1038,22 @@ class EnhancedQuizLoader {
   }
 
   /**
-   * Trigger the AI request for a question. In-flight -> ignored; failed -> retry.
-   * Starting a question aborts any other still-in-flight request.
+   * Trigger the AI request for a question.
+   * Only questions with no known correct answers (registered in aiRegistry) can be triggered.
+   * - In-flight ('asking') -> dismissed
+   * - Already completed ('done') -> dismissed (only runs once)
+   * - Failed ('failed') or initial ('idle') -> executes / retries
    */
   async triggerAI(questionId) {
     const entry = this.aiRegistry.get(questionId)
     if (!entry) return
 
     if (entry.state === 'asking') {
-      this.logger.info(`AI already running for ${questionId} - ignoring`)
+      this.logger.info(`AI already running for ${questionId} - ignoring duplicate tap`)
       return
     }
     if (entry.state === 'done') {
-      this.logger.info(`AI already answered ${questionId} - ignoring`)
+      this.logger.info(`AI already answered ${questionId} - ignoring duplicate tap`)
       return
     }
 
@@ -1034,8 +1066,10 @@ class EnhancedQuizLoader {
     this.setAIButtonState(entry, 'loader-circle', 'Asking AI…', '#7B1FA2', true)
 
     const questionInfo = {
+      questionLabel: entry.question.questionLabel,
       questionText: entry.question.questionText,
       questionType: entry.question.questionType,
+      selectionMode: entry.question.selectionMode,
       options: entry.question.options
     }
 
@@ -1134,53 +1168,57 @@ class EnhancedQuizLoader {
 
   /**
    * Right-click handler: trigger/retry a question's AI answer.
+   * Only acts on pending AI questions (no known correct answer).
    * One question per page -> right-click anywhere triggers the single pending one.
    * Multiple on page -> must right-click on the target question. If the click
    * isn't on a pending AI question, do nothing and let the native menu show.
    */
   handleRightClick(event) {
-    // One question per page: right-click anywhere suppresses the native menu.
-    // Triggers AI if pending; otherwise silently ignored (answered/fetching).
-    if (this.getQuestionIds().length <= 1) {
-      event.preventDefault()
-      const onlyId = [...this.aiRegistry.keys()][0]
-      if (onlyId) this.triggerAI(onlyId)
-      return
-    }
-
-    // Multiple questions on page: only over a question element. Right-clicking a
-    // question suppresses its menu whether or not AI is needed; acts only if pending.
-    const questionId = this.getQuestionIdFromEvent(event)
-    if (!questionId) return // not on a question - let the native menu show
-
-    event.preventDefault()
-    if (questionId && this.aiRegistry.has(questionId)) {
-      this.triggerAI(questionId)
-    }
-  }
-
-  /**
-   * Mobile double-tap: same targeting as right-click.
-   * One question per page -> double-tap anywhere; multiple -> on the question block.
-   * preventDefault only when triggering, so normal taps (inputs, links) still work.
-   */
-  handleDoubleTap(event) {
     if (this.getQuestionIds().length <= 1) {
       const onlyId = [...this.aiRegistry.keys()][0]
       if (onlyId) {
-        event.preventDefault() // suppress double-tap zoom / synthesized click
+        event.preventDefault()
         this.triggerAI(onlyId)
       }
       return
     }
 
     const questionId = this.getQuestionIdFromEvent(event)
-    if (!questionId) return
-
     if (questionId && this.aiRegistry.has(questionId)) {
       event.preventDefault()
       this.triggerAI(questionId)
     }
+  }
+
+  /**
+   * Universal Double Tap / Click (desktop double-click & mobile double-tap):
+   * Only triggers for questions with no known correct answer (pending in aiRegistry).
+   * - One question on page: double tap anywhere triggers the single pending question.
+   * - Multiple questions on page: double tap within the question block or choices.
+   */
+  async handleUniversalDoubleTap(event) {
+    if (this.getQuestionIds().length <= 1) {
+      const onlyId = [...this.aiRegistry.keys()][0]
+      if (onlyId) {
+        event.preventDefault()
+        await this.triggerAI(onlyId)
+      }
+      return
+    }
+
+    const questionId = this.getQuestionIdFromEvent(event)
+    if (questionId && this.aiRegistry.has(questionId)) {
+      event.preventDefault()
+      await this.triggerAI(questionId)
+    }
+  }
+
+  handleDoubleAction(event) {
+    return this.handleUniversalDoubleTap(event)
+  }
+
+  handleDoubleTap(event) {
+    return this.handleUniversalDoubleTap(event)
   }
 
   getQuestionIdFromEvent(event) {
@@ -2325,6 +2363,7 @@ class EnhancedDisplayer {
     }
 
     const labels = document.querySelectorAll(`#question_${questionId} .answer_label`)
+    const radioQuestion = document.querySelector(`#question_${questionId} input[type="radio"]`) !== null
     const isTextInputQuestion = [
       QuestionTypes.FILL_IN_BLANK,
       QuestionTypes.FORMULA_QUESTION,
@@ -2344,12 +2383,13 @@ class EnhancedDisplayer {
 
       const exact = labelTexts.filter(item => item.text === normalizedTarget)
       if (exact.length > 0) {
-        return exact.map(item => item.label)
+        return radioQuestion ? [exact[0].label] : exact.map(item => item.label)
       }
 
-      return labelTexts
+      const matches = labelTexts
         .filter(item => item.text.includes(normalizedTarget) || normalizedTarget.includes(item.text))
         .map(item => item.label)
+      return radioQuestion ? matches.slice(0, 1) : matches
     }
 
     switch (questionType) {
